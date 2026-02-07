@@ -1,0 +1,10 @@
+{
+    "lists": {
+        "1691": {
+            "enabled": true,
+            "intervalMinutes": 15,
+            "listName": "Offline",
+            "villageId": 17613
+        }
+    }
+}

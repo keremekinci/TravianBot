@@ -1,0 +1,6 @@
+[Server]
+baseUrl=https://ts30.x3.europe.travian.com
+
+[Credentials]
+username=your_username_here
+password=your_password_here
