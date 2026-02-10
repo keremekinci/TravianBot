@@ -23,7 +23,8 @@ class TravianUiBridge : public QObject {
                  refreshModeChanged)
   Q_PROPERTY(int nextRefreshIn READ nextRefreshIn NOTIFY nextRefreshInChanged)
   Q_PROPERTY(QVariantList buildQueue READ buildQueue NOTIFY buildQueueChanged)
-  Q_PROPERTY(QVariantList farmConfigs READ farmConfigs NOTIFY farmConfigsChanged)
+  Q_PROPERTY(
+      QVariantList farmConfigs READ farmConfigs NOTIFY farmConfigsChanged)
   Q_PROPERTY(QVariantList availableFarmLists READ availableFarmLists NOTIFY
                  availableFarmListsChanged)
   Q_PROPERTY(Account *account READ account CONSTANT)
@@ -31,8 +32,10 @@ class TravianUiBridge : public QObject {
                  setCurrentVillageId NOTIFY currentVillageIdChanged)
   Q_PROPERTY(
       QVariantList activityLog READ activityLog NOTIFY activityLogChanged)
-  Q_PROPERTY(QString botMode READ botMode WRITE setBotMode NOTIFY botModeChanged)
-  Q_PROPERTY(QVariantList troopConfigs READ troopConfigs NOTIFY troopConfigsChanged)
+  Q_PROPERTY(
+      QString botMode READ botMode WRITE setBotMode NOTIFY botModeChanged)
+  Q_PROPERTY(
+      QVariantList troopConfigs READ troopConfigs NOTIFY troopConfigsChanged)
 
 public:
   explicit TravianUiBridge(QObject *parent = nullptr);
@@ -67,8 +70,8 @@ public:
   Q_INVOKABLE void fetchFarmLists(int villageId);
   Q_INVOKABLE QVariantList farmListsForVillage(int villageId) const;
   Q_INVOKABLE void setFarmListConfig(int listId, int villageId,
-                                      const QString &listName,
-                                      int intervalMinutes);
+                                     const QString &listName,
+                                     int intervalMinutes);
   Q_INVOKABLE void removeFarmListConfig(int listId);
   Q_INVOKABLE void setFarmListEnabled(int listId, bool enabled);
   Q_INVOKABLE void executeFarmListNow(int listId);
@@ -80,9 +83,9 @@ public:
   Q_INVOKABLE void setBotMode(const QString &mode);
   QVariantList troopConfigs() const;
   Q_INVOKABLE void setVillageTroop(int villageId, const QString &troopId,
-                                    const QString &troopName,
-                                    const QString &building);
-  Q_INVOKABLE void removeVillageTroop(int villageId);
+                                   const QString &troopName,
+                                   const QString &building);
+  Q_INVOKABLE void removeVillageTroop(int villageId, const QString &building);
 
   // Activity log
   QVariantList activityLog() const { return m_activityLog; }
@@ -145,7 +148,7 @@ private:
       false; // True if build queue set custom refresh
 
   // Farm lists (per-village)
-  QVariantList m_availableFarmLists; // union of all village lists
+  QVariantList m_availableFarmLists;          // union of all village lists
   QMap<int, QVariantList> m_villageFarmLists; // villageId -> farm lists
 
   // Settings

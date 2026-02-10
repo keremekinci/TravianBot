@@ -1,9 +1,4 @@
 {
     "villages": {
-        "17613": {
-            "building": "barracks",
-            "troopId": "t1",
-            "troopName": "Tokmakci"
-        }
     }
 }

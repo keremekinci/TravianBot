@@ -169,6 +169,38 @@ bool TravianDataFetcher::loadConfig(const QString &configPath) {
                     "fields": ["troopNum"]
                 }
             }
+        },
+        "stable": {
+            "url": "/build.php",
+            "description": "Ahir - atli asker egitimi",
+            "fields": {
+                "trainableTroops": {
+                    "selector": "innerTroopWrapper\\s+troopt(\\d+)[^\"]*\"[^>]*data-troop(?:id|ID)=\"(t\\d+)\"[\\s\\S]*?alt=\"([^\"]+)\"",
+                    "type": "list",
+                    "fields": ["troopNum", "troopId", "name"]
+                },
+                "lockedTroops": {
+                    "selector": "action troop troopt(\\d+) empty",
+                    "type": "list",
+                    "fields": ["troopNum"]
+                }
+            }
+        },
+        "workshop": {
+            "url": "/build.php",
+            "description": "Atokye - kusatma araclari",
+            "fields": {
+                "trainableTroops": {
+                    "selector": "innerTroopWrapper\\s+troopt(\\d+)[^\"]*\"[^>]*data-troop(?:id|ID)=\"(t\\d+)\"[\\s\\S]*?alt=\"([^\"]+)\"",
+                    "type": "list",
+                    "fields": ["troopNum", "troopId", "name"]
+                },
+                "lockedTroops": {
+                    "selector": "action troop troopt(\\d+) empty",
+                    "type": "list",
+                    "fields": ["troopNum"]
+                }
+            }
         }
     },
     "villageList": {
@@ -822,7 +854,8 @@ void TravianDataFetcher::onUpgradeFinished(QNetworkReply *reply) {
       upgradeUrl = m_baseUrl + "/build.php?id=" + QString::number(slotId);
     }
 
-    // Köy ID'sini upgrade URL'sine ekle (farklı köy için upgrade yapabilmek için)
+    // Köy ID'sini upgrade URL'sine ekle (farklı köy için upgrade yapabilmek
+    // için)
     if (villageId > 0 && !upgradeUrl.contains("newdid")) {
       upgradeUrl += "&newdid=" + QString::number(villageId);
     }
@@ -879,14 +912,13 @@ void TravianDataFetcher::onUpgradeFinished(QNetworkReply *reply) {
 // ============================================================================
 
 void TravianDataFetcher::trainTroops(int villageId, int slotId,
-                                      const QString &troopId,
-                                      const QString &troopName) {
+                                     const QString &troopId,
+                                     const QString &troopName) {
   qDebug() << "[TROOP] trainTroops called - village:" << villageId
            << "slot:" << slotId << "troop:" << troopId << "name:" << troopName;
 
   // Step 1: Fetch the barracks/stable/workshop page
-  QString buildUrl =
-      m_baseUrl + "/build.php?id=" + QString::number(slotId);
+  QString buildUrl = m_baseUrl + "/build.php?id=" + QString::number(slotId);
   if (villageId > 0) {
     buildUrl += "&newdid=" + QString::number(villageId);
   }
@@ -946,8 +978,18 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     }
 
     // Extract troop number from troopId (e.g., "t1" -> "1", "t3" -> "3")
-    QString troopNum = troopId;
-    troopNum.remove(0, 1); // Remove 't' prefix
+    // Also handle global IDs (e.g. "u11" -> "t1", "u21" -> "t1")
+    QString inputName = troopId;
+    if (troopId.startsWith("u")) {
+      int gid = troopId.mid(1).toInt();
+      int rid = (gid - 1) % 10 + 1;
+      inputName = "t" + QString::number(rid);
+      qDebug() << "[TROOP] Converted global ID" << troopId
+               << "to relative input" << inputName;
+    } else if (troopId.startsWith("t")) {
+      // Already relative or old format
+      inputName = troopId;
+    }
 
     // Use troop name from config (passed via property), fallback to troopId
     QString troopName = reply->property("troopName").toString();
@@ -964,11 +1006,13 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     // The input and max link are very close together, within ~200 chars
     int maxCount = 0;
 
-    // Pattern 1: Find name="t1" input, then the very next .val(N) within same cta block
-    // Use [\s\S] instead of . to match across newlines, with negative lookahead to stay in same section
+    // Pattern 1: Find name="t1" input, then the very next .val(N) within same
+    // cta block Use [\s\S] instead of . to match across newlines, with negative
+    // lookahead to stay in same section
     QRegularExpression maxRegex1(
-        QString(R"~~(<input[^>]*name="%1"[^>]*/?>(?:(?!<input)[\s\S]){0,300}\.val\((\d+)\))~~")
-            .arg(troopId));
+        QString(
+            R"~~(<input[^>]*name="%1"[^>]*/?>(?:(?!<input)[\s\S]){0,300}\.val\((\d+)\))~~")
+            .arg(inputName));
     QRegularExpressionMatch maxMatch = maxRegex1.match(response);
 
     if (maxMatch.hasMatch()) {
@@ -977,20 +1021,22 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     }
 
     if (maxCount <= 0) {
-      // Pattern 2: Find name="t1" input, then the next <a>NUMBER</a> within 300 chars
+      // Pattern 2: Find name="t1" input, then the next <a>NUMBER</a> within 300
+      // chars
       QRegularExpression maxRegex2(
-          QString(R"~~(<input[^>]*name="%1"[^>]*/?>(?:(?!<input)[\s\S]){0,300}<a[^>]*>(\d+)</a>)~~")
-              .arg(troopId));
+          QString(
+              R"~~(<input[^>]*name="%1"[^>]*/?>(?:(?!<input)[\s\S]){0,300}<a[^>]*>(\d+)</a>)~~")
+              .arg(inputName));
       QRegularExpressionMatch maxMatch2 = maxRegex2.match(response);
       if (maxMatch2.hasMatch()) {
         maxCount = maxMatch2.captured(1).toInt();
-        qDebug() << "[TROOP] Found max count via link text after input:" << maxCount;
+        qDebug() << "[TROOP] Found max count via link text after input:"
+                 << maxCount;
       }
     }
 
     if (maxCount <= 0) {
-      qWarning() << "[TROOP] Could not find max trainable count for"
-                  << troopId;
+      qWarning() << "[TROOP] Could not find max trainable count for" << troopId;
       emit troopTrainingResult(villageId, false, troopName, 0,
                                "Maksimum asker sayısı bulunamadı - kaynak "
                                "yetersiz veya kışla meşgul olabilir");
@@ -998,8 +1044,7 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     }
 
     // Find the form action URL (method may be before or after action)
-    QRegularExpression formRegex(
-        R"~~(<form[^>]*action="([^"]+)"[^>]*>)~~");
+    QRegularExpression formRegex(R"~~(<form[^>]*action="([^"]+)"[^>]*>)~~");
     QRegularExpressionMatch formMatch = formRegex.match(response);
 
     QString formAction;
@@ -1044,14 +1089,15 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
       }
     }
 
-    // Set the troop count - HTML input name is "t1", "t2", etc. (same as troopId)
-    postData.addQueryItem(troopId, QString::number(maxCount));
+    // Set the troop count - HTML input name is "t1", "t2", etc. (same as
+    // inputName)
+    postData.addQueryItem(inputName, QString::number(maxCount));
 
     // Add submit button value (s1=ok) as required by the form
     postData.addQueryItem("s1", "ok");
 
-    qDebug() << "[TROOP] Training" << maxCount << "of" << troopName
-             << "(" << troopId << "=" << maxCount << ")";
+    qDebug() << "[TROOP] Training" << maxCount << "of" << troopName << "("
+             << troopId << "=" << maxCount << ")";
     qDebug() << "[TROOP] POST data:" << postData.toString(QUrl::FullyEncoded);
 
     // Submit the form via POST
@@ -1064,8 +1110,8 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
         "Referer",
         (m_baseUrl + "/build.php?id=" + QString::number(slotId)).toUtf8());
 
-    QNetworkReply *postReply =
-        m_networkManager->post(postRequest, postData.toString(QUrl::FullyEncoded).toUtf8());
+    QNetworkReply *postReply = m_networkManager->post(
+        postRequest, postData.toString(QUrl::FullyEncoded).toUtf8());
     postReply->setProperty("isTrainRequest", true);
     postReply->setProperty("trainStep", "doTrain");
     postReply->setProperty("villageId", villageId);
@@ -1086,13 +1132,13 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     qDebug() << "[TROOP] Training POST response received for" << troopName;
 
     // Check for success indicators
-    if (response.contains("buildingList") || response.contains("under_progress") ||
-        response.contains("timer") || response.contains("dur_r")) {
+    if (response.contains("buildingList") ||
+        response.contains("under_progress") || response.contains("timer") ||
+        response.contains("dur_r")) {
       qInfo() << "[TROOP] Training started:" << trainCount << "x" << troopName;
-      emit troopTrainingResult(villageId, true, troopName, trainCount,
-                               QString("%1x %2 eğitim başlatıldı")
-                                   .arg(trainCount)
-                                   .arg(troopName));
+      emit troopTrainingResult(
+          villageId, true, troopName, trainCount,
+          QString("%1x %2 eğitim başlatıldı").arg(trainCount).arg(troopName));
     } else if (response.contains("notEnough") ||
                response.contains("enough resources")) {
       emit troopTrainingResult(villageId, false, troopName, 0,
@@ -1101,10 +1147,9 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
       // Usually successful - Travian redirects after training
       qInfo() << "[TROOP] Training likely started:" << trainCount << "x"
               << troopName;
-      emit troopTrainingResult(villageId, true, troopName, trainCount,
-                               QString("%1x %2 eğitim başlatıldı")
-                                   .arg(trainCount)
-                                   .arg(troopName));
+      emit troopTrainingResult(
+          villageId, true, troopName, trainCount,
+          QString("%1x %2 eğitim başlatıldı").arg(trainCount).arg(troopName));
     }
   }
 }
@@ -1398,8 +1443,9 @@ void TravianDataFetcher::fetchFarmLists(int villageId) {
   }
 
   // Fetch the farm list tab (tt=99)
-  QString farmUrl = m_baseUrl + "/build.php?id=" +
-                    QString::number(rallyPointSlotId) + "&tt=99";
+  QString farmUrl = m_baseUrl +
+                    "/build.php?id=" + QString::number(rallyPointSlotId) +
+                    "&tt=99";
   if (villageId > 0) {
     farmUrl += "&newdid=" + QString::number(villageId);
   }
@@ -1425,8 +1471,8 @@ void TravianDataFetcher::executeFarmList(int villageId, int listId) {
            << "listId:" << listId;
 
   // Step 1: Fetch farm list page to get active slot IDs
-  QString fetchUrl = m_baseUrl + "/build.php?id=39&tt=99&newdid=" +
-                     QString::number(villageId);
+  QString fetchUrl =
+      m_baseUrl + "/build.php?id=39&tt=99&newdid=" + QString::number(villageId);
 
   QNetworkRequest request;
   request.setUrl(QUrl(fetchUrl));
@@ -1443,7 +1489,7 @@ void TravianDataFetcher::executeFarmList(int villageId, int listId) {
 }
 
 void TravianDataFetcher::sendFarmListPost(int villageId, int listId,
-                                           const QJsonArray &slotIds) {
+                                          const QJsonArray &slotIds) {
   // Step 2: POST to /api/v1/farm-list/send with slot IDs
   QString apiUrl = m_baseUrl + "/api/v1/farm-list/send";
 
@@ -1470,10 +1516,9 @@ void TravianDataFetcher::sendFarmListPost(int villageId, int listId,
   apiRequest.setRawHeader("Accept", "application/json");
   apiRequest.setRawHeader("X-Requested-With", "XMLHttpRequest");
   apiRequest.setRawHeader(
-      "Referer",
-      (m_baseUrl + "/build.php?id=39&tt=99&newdid=" +
-       QString::number(villageId))
-          .toUtf8());
+      "Referer", (m_baseUrl +
+                  "/build.php?id=39&tt=99&newdid=" + QString::number(villageId))
+                     .toUtf8());
   apiRequest.setRawHeader("Origin", m_baseUrl.toUtf8());
 
   QNetworkReply *reply = m_networkManager->post(apiRequest, jsonData);
@@ -1498,16 +1543,16 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
     int statusCode =
         reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     QByteArray errorBody = reply->readAll();
-    qWarning() << "[FARM] Network error:" << error
-               << "status:" << statusCode
+    qWarning() << "[FARM] Network error:" << error << "status:" << statusCode
                << "body:" << QString::fromUtf8(errorBody).left(500);
 
     // For farm execution, still emit result with error
     if (farmStep == "executePost") {
       int listId = reply->property("listId").toInt();
       emit farmListExecuted(villageId, listId, false,
-                            QString("HTTP %1: %2").arg(statusCode).arg(
-                                QString::fromUtf8(errorBody).left(200)));
+                            QString("HTTP %1: %2")
+                                .arg(statusCode)
+                                .arg(QString::fromUtf8(errorBody).left(200)));
     }
     reply->deleteLater();
     return;
@@ -1527,8 +1572,7 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
   reply->deleteLater();
 
   // Save debug HTML
-  QFile debugFile(
-      "/Users/kekinci/Desktop/test/config/debug_farm_page.html");
+  QFile debugFile("/Users/kekinci/Desktop/test/config/debug_farm_page.html");
   if (debugFile.open(QIODevice::WriteOnly)) {
     debugFile.write(response.toUtf8());
     debugFile.close();
@@ -1540,8 +1584,7 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
     QVariantList lists;
 
     // Extract the farmLists JSON array from the viewData
-    QRegularExpression farmListsRegex(
-        R"~~("farmLists"\s*:\s*\[)~~");
+    QRegularExpression farmListsRegex(R"~~("farmLists"\s*:\s*\[)~~");
     QRegularExpressionMatch flMatch = farmListsRegex.match(response);
 
     if (flMatch.hasMatch()) {
@@ -1553,8 +1596,7 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
       QRegularExpression listItemRegex(
           R"~~(\{"id"\s*:\s*(\d+)\s*,\s*"name"\s*:\s*"([^"]*)")~~");
       // Also capture slotsAmount
-      QRegularExpression slotsRegex(
-          R"~~("slotsAmount"\s*:\s*(\d+))~~");
+      QRegularExpression slotsRegex(R"~~("slotsAmount"\s*:\s*(\d+))~~");
       QRegularExpression ownerRegex(
           R"~~("ownerVillage"\s*:\s*\{"id"\s*:\s*(\d+))~~");
 
@@ -1594,8 +1636,8 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
         // Find slotsAmount after this list's id
         int searchStart = m.capturedEnd();
         // Look for slotsAmount and ownerVillage within the next 500 chars
-        QString context = farmListsStr.mid(searchStart,
-                                            qMin(500, farmListsStr.length() - searchStart));
+        QString context = farmListsStr.mid(
+            searchStart, qMin(500, farmListsStr.length() - searchStart));
         QRegularExpressionMatch slotsMatch = slotsRegex.match(context);
         if (slotsMatch.hasMatch()) {
           listInfo["slotsAmount"] = slotsMatch.captured(1).toInt();
@@ -1622,13 +1664,14 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
     // Step 1 response: Parse farm list page to get slot IDs for target list
     int listId = reply->property("listId").toInt();
 
-    qDebug() << "[FARM] Parsing farm list page for slot IDs - listId:" << listId;
+    qDebug() << "[FARM] Parsing farm list page for slot IDs - listId:"
+             << listId;
 
     // Find slotsStates for the target farm list
-    // Format in viewData: "id":1691,...,"slotsStates":[{"id":56722,"isActive":true},...]
-    // We need to find the slotsStates array for our specific list ID
-    QString listIdPattern =
-        QString("\"id\":%1").arg(listId);
+    // Format in viewData:
+    // "id":1691,...,"slotsStates":[{"id":56722,"isActive":true},...] We need to
+    // find the slotsStates array for our specific list ID
+    QString listIdPattern = QString("\"id\":%1").arg(listId);
     int listPos = response.indexOf(listIdPattern);
 
     QJsonArray activeSlotIds;
@@ -1640,7 +1683,8 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
 
       // Make sure we didn't overshoot to the next list
       int nextListPos = response.indexOf("\"farmLists\"", listPos + 10);
-      if (nextListPos < 0) nextListPos = response.length();
+      if (nextListPos < 0)
+        nextListPos = response.length();
 
       if (slotsPos >= 0 && slotsPos < nextListPos) {
         // Find the array start
@@ -1651,7 +1695,8 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
           int arrayEnd = arrayStart;
           for (int i = arrayStart; i < response.length(); i++) {
             QChar c = response[i];
-            if (c == '[') depth++;
+            if (c == '[')
+              depth++;
             else if (c == ']') {
               depth--;
               if (depth == 0) {
@@ -1680,8 +1725,7 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
 
     if (activeSlotIds.isEmpty()) {
       qWarning() << "[FARM] No active slots found for list" << listId;
-      emit farmListExecuted(villageId, listId, false,
-                            "Aktif slot bulunamadı");
+      emit farmListExecuted(villageId, listId, false, "Aktif slot bulunamadı");
       return;
     }
 
@@ -1712,8 +1756,7 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
         errorMsg = jsonObj["errors"].toString();
       }
       qWarning() << "[FARM] Send error:" << errorMsg;
-      emit farmListExecuted(villageId, listId, false,
-                            "Hata: " + errorMsg);
+      emit farmListExecuted(villageId, listId, false, "Hata: " + errorMsg);
     }
     // Check for success
     else if (statusCode == 200) {

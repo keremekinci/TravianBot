@@ -51,11 +51,10 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
 
   connect(m_farmListManager, &FarmListManager::farmExecutionStarted, this,
           [this](int villageId, int listId) {
-            logActivity(
-                QString("Yağma listesi başlatılıyor (Köy %1, Liste %2)")
-                    .arg(villageId)
-                    .arg(listId),
-                "info");
+            logActivity(QString("Yağma listesi başlatılıyor (Köy %1, Liste %2)")
+                            .arg(villageId)
+                            .arg(listId),
+                        "info");
           });
 
   // Initialize account model
@@ -209,83 +208,83 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
             setLoading(false);
           });
 
-  connect(m_fetcher, &TravianDataFetcher::allDataFetched, this,
-          [this](const QVariantMap &allData) {
-            // ham data
-            m_allData = allData;
-            emit allDataChanged();
+  connect(
+      m_fetcher, &TravianDataFetcher::allDataFetched, this,
+      [this](const QVariantMap &allData) {
+        // ham data
+        m_allData = allData;
+        emit allDataChanged();
 
-            // QML için düzgün villages listesi üret
-            QVariantList vlist;
-            const QList<VillageInfo> v = m_fetcher->getVillages();
+        // QML için düzgün villages listesi üret
+        QVariantList vlist;
+        const QList<VillageInfo> v = m_fetcher->getVillages();
 
-            for (const VillageInfo &vi : v) {
-              QVariantMap one;
-              one["id"] = vi.id;
-              one["name"] = vi.name;
-              one["data"] = vi.data;
-              vlist.append(one);
-            }
+        for (const VillageInfo &vi : v) {
+          QVariantMap one;
+          one["id"] = vi.id;
+          one["name"] = vi.name;
+          one["data"] = vi.data;
+          vlist.append(one);
+        }
 
-            m_villages = vlist;
-            emit villagesChanged();
+        m_villages = vlist;
+        emit villagesChanged();
 
-            setStatus(QString("✅ %1 köy verisi yüklendi").arg(v.size()));
-            logActivity(
-                QString("%1 köy verisi başarıyla yüklendi").arg(v.size()),
-                "success");
-            setLoading(false);
+        setStatus(QString("✅ %1 köy verisi yüklendi").arg(v.size()));
+        logActivity(QString("%1 köy verisi başarıyla yüklendi").arg(v.size()),
+                    "success");
+        setLoading(false);
 
-            // Reset flag before processing queue
-            m_buildQueueScheduledRefresh = false;
+        // Reset flag before processing queue
+        m_buildQueueScheduledRefresh = false;
 
-            // Upgrade sonrası flag'i sıfırla
-            if (m_upgradeInProgress) {
-              m_upgradeInProgress = false;
-              qDebug() << "[UI] Upgrade sonrası veri geldi";
-            }
+        // Upgrade sonrası flag'i sıfırla
+        if (m_upgradeInProgress) {
+          m_upgradeInProgress = false;
+          qDebug() << "[UI] Upgrade sonrası veri geldi";
+        }
 
-            // Process build queue - kuyrukta görev varsa her zaman çalışır
-            // NOT: Sonsuz döngü tehlikesi yok çünkü:
-            // 1) upgradeStarted artık anında startFetch çağırmıyor (10 sn bekliyor)
-            // 2) isBuilderFree() inşaat devam ediyorsa yeni upgrade başlatmıyor
-            if (m_buildQueueManager->totalTaskCount() > 0) {
-              logActivity(QString("İnşaat kuyruğu işleniyor (%1 görev)")
-                              .arg(m_buildQueueManager->totalTaskCount()),
-                          "info");
-              m_buildQueueManager->processQueue(m_fetcher, allData);
-            }
+        // Process build queue - kuyrukta görev varsa her zaman çalışır
+        // NOT: Sonsuz döngü tehlikesi yok çünkü:
+        // 1) upgradeStarted artık anında startFetch çağırmıyor (10 sn bekliyor)
+        // 2) isBuilderFree() inşaat devam ediyorsa yeni upgrade başlatmıyor
+        if (m_buildQueueManager->totalTaskCount() > 0) {
+          logActivity(QString("İnşaat kuyruğu işleniyor (%1 görev)")
+                          .arg(m_buildQueueManager->totalTaskCount()),
+                      "info");
+          m_buildQueueManager->processQueue(m_fetcher, allData);
+        }
 
-            // Process troop training - config varsa her zaman çalışır
-            if (!m_troopQueueManager->getConfiguredVillages().isEmpty()) {
-              logActivity("Asker eğitimi işleniyor...", "info");
-              m_troopQueueManager->processTraining(m_fetcher, allData);
-            }
+        // Process troop training - config varsa her zaman çalışır
+        if (!m_troopQueueManager->getConfiguredVillages().isEmpty()) {
+          logActivity("Asker eğitimi işleniyor...", "info");
+          m_troopQueueManager->processTraining(m_fetcher, allData);
+        }
 
-            // Process farm lists (keep timers running) - her zaman çalışır
-            if (!m_farmListManager->getConfiguredLists().isEmpty()) {
-              m_farmListManager->processAllFarms(m_fetcher, allData);
-            }
+        // Process farm lists (keep timers running) - her zaman çalışır
+        if (!m_farmListManager->getConfiguredLists().isEmpty()) {
+          m_farmListManager->processAllFarms(m_fetcher, allData);
+        }
 
-            // Auto-fetch farm lists - sadece ilk yüklemede bir kez çalışır
-            if (!m_farmListsFetched) {
-              m_farmListsFetched = true;
-              qDebug() << "[UI] İlk yükleme: farm listeleri otomatik çekiliyor (" << v.size() << "köy)";
-              for (int i = 0; i < v.size(); ++i) {
-                int vid = v[i].id;
-                QTimer::singleShot(1000 + i * 2000, this,
-                                   [this, vid]() {
-                                     m_fetcher->fetchFarmLists(vid);
-                                   });
-              }
-            }
+        // Auto-fetch farm lists - sadece ilk yüklemede bir kez çalışır
+        if (!m_farmListsFetched) {
+          m_farmListsFetched = true;
+          qDebug() << "[UI] İlk yükleme: farm listeleri otomatik çekiliyor ("
+                   << v.size() << "köy)";
+          for (int i = 0; i < v.size(); ++i) {
+            int vid = v[i].id;
+            QTimer::singleShot(1000 + i * 2000, this, [this, vid]() {
+              m_fetcher->fetchFarmLists(vid);
+            });
+          }
+        }
 
-            // Start auto-refresh if enabled (but not if build queue already
-            // scheduled)
-            if (m_autoRefreshEnabled && !m_buildQueueScheduledRefresh) {
-              scheduleNextRefresh();
-            }
-          });
+        // Start auto-refresh if enabled (but not if build queue already
+        // scheduled)
+        if (m_autoRefreshEnabled && !m_buildQueueScheduledRefresh) {
+          scheduleNextRefresh();
+        }
+      });
 
   // Upgrade signals
   connect(m_fetcher, &TravianDataFetcher::upgradeStarted, this,
@@ -294,8 +293,9 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
             Q_UNUSED(slotId);
             setStatus("🔨 " + buildingName + " yükseltiliyor...");
             logActivity(buildingName + " yükseltme başlatıldı", "success");
-            // Upgrade sonrası verileri yenile — ama hemen değil, 10 saniye bekle
-            // Bu sayede sonsuz döngü engellenir (anında çağırınca döngü oluşuyordu)
+            // Upgrade sonrası verileri yenile — ama hemen değil, 10 saniye
+            // bekle Bu sayede sonsuz döngü engellenir (anında çağırınca döngü
+            // oluşuyordu)
             m_upgradeInProgress = true;
             m_refreshTimer->stop();
             m_refreshTimer->start(10000); // 10 saniye sonra yenile
@@ -341,42 +341,38 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                         "info");
           });
 
-  connect(m_fetcher, &TravianDataFetcher::farmListExecuted, this,
-          [this](int villageId, int listId, bool success,
-                 const QString &message) {
-            if (success) {
-              logActivity(
-                  QString("Yağma listesi başlatıldı (Köy %1, Liste %2)")
-                      .arg(villageId)
-                      .arg(listId),
-                  "success");
-            } else {
-              logActivity(
-                  QString("Yağma listesi hatası (Köy %1, Liste %2): %3")
-                      .arg(villageId)
-                      .arg(listId)
-                      .arg(message),
-                  "error");
-            }
-          });
+  connect(
+      m_fetcher, &TravianDataFetcher::farmListExecuted, this,
+      [this](int villageId, int listId, bool success, const QString &message) {
+        if (success) {
+          logActivity(QString("Yağma listesi başlatıldı (Köy %1, Liste %2)")
+                          .arg(villageId)
+                          .arg(listId),
+                      "success");
+        } else {
+          logActivity(QString("Yağma listesi hatası (Köy %1, Liste %2): %3")
+                          .arg(villageId)
+                          .arg(listId)
+                          .arg(message),
+                      "error");
+        }
+      });
 
   // Troop training results
   connect(m_fetcher, &TravianDataFetcher::troopTrainingResult, this,
           [this](int villageId, bool success, const QString &troopName,
                  int count, const QString &message) {
             if (success) {
-              logActivity(
-                  QString("Asker eğitimi başlatıldı (Köy %1): %2x %3")
-                      .arg(villageId)
-                      .arg(count)
-                      .arg(troopName),
-                  "success");
+              logActivity(QString("Asker eğitimi başlatıldı (Köy %1): %2x %3")
+                              .arg(villageId)
+                              .arg(count)
+                              .arg(troopName),
+                          "success");
             } else {
-              logActivity(
-                  QString("Asker eğitimi hatası (Köy %1): %2")
-                      .arg(villageId)
-                      .arg(message),
-                  "error");
+              logActivity(QString("Asker eğitimi hatası (Köy %1): %2")
+                              .arg(villageId)
+                              .arg(message),
+                          "error");
             }
           });
 
@@ -509,7 +505,6 @@ void TravianUiBridge::onCountdownTimer() {
     m_nextRefreshIn--;
     emit nextRefreshInChanged();
   }
-
 }
 
 void TravianUiBridge::scheduleNextRefresh() {
@@ -637,7 +632,9 @@ void TravianUiBridge::removeFromBuildQueue(int villageId, int index) {
   QString name =
       (index >= 0 && index < queue.size()) ? queue[index].buildingName : "?";
   m_buildQueueManager->removeTask(villageId, index);
-  logActivity(QString("Kuyruktan silindi: %1 (Köy %2)").arg(name).arg(villageId), "info");
+  logActivity(
+      QString("Kuyruktan silindi: %1 (Köy %2)").arg(name).arg(villageId),
+      "info");
 }
 // Farm list methods
 QVariantList TravianUiBridge::farmConfigs() const {
@@ -666,9 +663,10 @@ QVariantList TravianUiBridge::farmListsForVillage(int villageId) const {
 }
 
 void TravianUiBridge::setFarmListConfig(int listId, int villageId,
-                                         const QString &listName,
-                                         int intervalMinutes) {
-  m_farmListManager->setListConfig(listId, villageId, listName, intervalMinutes);
+                                        const QString &listName,
+                                        int intervalMinutes) {
+  m_farmListManager->setListConfig(listId, villageId, listName,
+                                   intervalMinutes);
   logActivity(QString("Yağma listesi ayarlandı: %1 (Liste %2, %3 dk)")
                   .arg(listName)
                   .arg(listId)
@@ -678,23 +676,21 @@ void TravianUiBridge::setFarmListConfig(int listId, int villageId,
 
 void TravianUiBridge::removeFarmListConfig(int listId) {
   m_farmListManager->removeListConfig(listId);
-  logActivity(
-      QString("Yağma listesi ayarı kaldırıldı (Liste %1)").arg(listId), "info");
+  logActivity(QString("Yağma listesi ayarı kaldırıldı (Liste %1)").arg(listId),
+              "info");
 }
 
 void TravianUiBridge::setFarmListEnabled(int listId, bool enabled) {
   m_farmListManager->setListEnabled(listId, enabled);
-  logActivity(
-      QString("Yağma listesi %1 %2")
-          .arg(listId)
-          .arg(enabled ? "aktif edildi" : "devre dışı bırakıldı"),
-      "info");
+  logActivity(QString("Yağma listesi %1 %2")
+                  .arg(listId)
+                  .arg(enabled ? "aktif edildi" : "devre dışı bırakıldı"),
+              "info");
 }
 
 void TravianUiBridge::executeFarmListNow(int listId) {
-  logActivity(
-      QString("Yağma listesi %1 manuel başlatılıyor").arg(listId),
-      "info");
+  logActivity(QString("Yağma listesi %1 manuel başlatılıyor").arg(listId),
+              "info");
 
   // Manuel gönderimde config olmasa da çalışmalı
   // Seçili köyden gönder
@@ -795,8 +791,8 @@ QVariantList TravianUiBridge::troopConfigs() const {
 }
 
 void TravianUiBridge::setVillageTroop(int villageId, const QString &troopId,
-                                       const QString &troopName,
-                                       const QString &building) {
+                                      const QString &troopName,
+                                      const QString &building) {
   m_troopQueueManager->setVillageTroop(villageId, troopId, troopName, building);
   logActivity(QString("Köy %1 için asker ayarlandı: %2 (%3)")
                   .arg(villageId)
@@ -805,9 +801,11 @@ void TravianUiBridge::setVillageTroop(int villageId, const QString &troopId,
               "info");
 }
 
-void TravianUiBridge::removeVillageTroop(int villageId) {
-  m_troopQueueManager->removeVillageTroop(villageId);
-  logActivity(
-      QString("Köy %1 için otomatik asker basma kaldırıldı").arg(villageId),
-      "info");
+void TravianUiBridge::removeVillageTroop(int villageId,
+                                         const QString &building) {
+  m_troopQueueManager->removeVillageTroop(villageId, building);
+  logActivity(QString("Köy %1 için otomatik asker basma kaldırıldı (%2)")
+                  .arg(villageId)
+                  .arg(building),
+              "info");
 }

@@ -1047,81 +1047,69 @@ ApplicationWindow {
                             // tribe id: 1 Roma, 2 Cermen, 3 Galya, 4 Doğu, 5 Hun, 6 Mısır
                             property var troopsByTribe: ({
                                 1: [ // ROMA
-                                    {id: "t1",  name: "Lejyoner",             building: "barracks"},
-                                    {id: "t2",  name: "Praetorian",           building: "barracks"},
-                                    {id: "t3",  name: "Impreyan",             building: "barracks"},
-                                    {id: "t4",  name: "Equites Legati",       building: "stable"},
-                                    {id: "t5",  name: "Equites Imperatoris",  building: "stable"},
-                                    {id: "t6",  name: "Equites Caesaris",     building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Ates Manciniği",       building: "workshop"},
-                                    {id: "t9",  name: "Senator",              building: "residence"},
-                                    {id: "t10", name: "Kolonici",             building: "residence"}
+                                    {id: "u1",  name: "Lejyoner",             building: "barracks"},
+                                    {id: "u2",  name: "Praetorian",           building: "barracks"},
+                                    {id: "u3",  name: "Emperyan",             building: "barracks"},
+                                    {id: "u4",  name: "Equites Legati",       building: "stable"},
+                                    {id: "u5",  name: "Equites Imperatoris",  building: "stable"},
+                                    {id: "u6",  name: "Equites Caesaris",     building: "stable"},
+                                    {id: "u7",  name: "Koç Başı",             building: "workshop"},
+                                    {id: "u8",  name: "Ateş Mancınığı",       building: "workshop"},
+                                    {id: "u9",  name: "Senatör",              building: "residence"},
+                                    {id: "u10", name: "Göçmen",               building: "residence"}
                                 ],
 
                                 2: [ // CERMEN (Teuton)
-                                    {id: "t1",  name: "Tokmakci",             building: "barracks"},
-                                    {id: "t2",  name: "Mizrakci",             building: "barracks"},
-                                    {id: "t3",  name: "Balta Sallayan",       building: "barracks"},
-                                    {id: "t4",  name: "Izci",                 building: "stable"},
-                                    {id: "t5",  name: "Paladin",              building: "stable"},
-                                    {id: "t6",  name: "Teuton Sovalye",       building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Katar",                building: "workshop"},
-                                    {id: "t9",  name: "Sef",                  building: "residence"},
-                                    {id: "t10", name: "Yerlesimci",           building: "residence"}
+                                    {id: "u11", name: "Tokmak Sallayan",      building: "barracks"},
+                                    {id: "u12", name: "Mızrakçı",             building: "barracks"},
+                                    {id: "u13", name: "Balta Sallayan",       building: "barracks"},
+                                    {id: "u14", name: "Casus",                building: "barracks"}, // Cermen casusu kışlada
+                                    {id: "u15", name: "Paladin",              building: "stable"},
+                                    {id: "u16", name: "Toyton Şövalyesi",     building: "stable"},
+                                    {id: "u17", name: "Koç Başı",             building: "workshop"},
+                                    {id: "u18", name: "Mancınık",             building: "workshop"},
+                                    {id: "u19", name: "Reis",                 building: "residence"},
+                                    {id: "u20", name: "Göçmen",               building: "residence"}
                                 ],
 
                                 3: [ // GALYA (Gaul)
-                                    {id: "t1",  name: "Phalanx",              building: "barracks"},
-                                    {id: "t2",  name: "Kilic Ustasi",         building: "barracks"},
-                                    {id: "t3",  name: "Izci",                 building: "barracks"},
-                                    {id: "t4",  name: "Gokgurultusu",         building: "stable"},
-                                    {id: "t5",  name: "Druyid Survarisi",     building: "stable"},
-                                    {id: "t6",  name: "Haeduan",              building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Mancinik",             building: "workshop"},
-                                    {id: "t9",  name: "Reis",                 building: "residence"},
-                                    {id: "t10", name: "Yerlesimci",           building: "residence"}
-                                ],
-
-                                4: [ // DOGU / NATAR tarzı (servera göre değişebiliyor)
-                                    {id: "t1",  name: "Unit 1",               building: "barracks"},
-                                    {id: "t2",  name: "Unit 2",               building: "barracks"},
-                                    {id: "t3",  name: "Unit 3",               building: "barracks"},
-                                    {id: "t4",  name: "Unit 4",               building: "stable"},
-                                    {id: "t5",  name: "Unit 5",               building: "stable"},
-                                    {id: "t6",  name: "Unit 6",               building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Mancinik",             building: "workshop"},
-                                    {id: "t9",  name: "Kahraman",             building: "residence"},
-                                    {id: "t10", name: "Yerlesimci",           building: "residence"}
+                                    {id: "u21", name: "Phalanx",              building: "barracks"},
+                                    {id: "u22", name: "Kılıçlı",              building: "barracks"},
+                                    {id: "u23", name: "Casus",                building: "stable"},   // Galya casusu ahırda
+                                    {id: "u24", name: "Toytatın Şimşeği",     building: "stable"},
+                                    {id: "u25", name: "Druyid",               building: "stable"},
+                                    {id: "u26", name: "Haeduan",              building: "stable"},
+                                    {id: "u27", name: "Koç Başı",             building: "workshop"},
+                                    {id: "u28", name: "Mancınık",             building: "workshop"},
+                                    {id: "u29", name: "Kabile Reisi",         building: "residence"},
+                                    {id: "u30", name: "Göçmen",               building: "residence"}
                                 ],
 
                                 5: [ // HUN
-                                    {id: "t1",  name: "Parali Asker",         building: "barracks"},
-                                    {id: "t2",  name: "Okcu",                 building: "barracks"},
-                                    {id: "t3",  name: "Akinci",               building: "barracks"},
-                                    {id: "t4",  name: "Kesifci",              building: "stable"},
-                                    {id: "t5",  name: "Step Binicisi",        building: "stable"},
-                                    {id: "t6",  name: "Marauder",             building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Mancinik",             building: "workshop"},
-                                    {id: "t9",  name: "Bey",                  building: "residence"},
-                                    {id: "t10", name: "Yerlesimci",           building: "residence"}
+                                    {id: "u51", name: "Paralı Asker",         building: "barracks"},
+                                    {id: "u52", name: "Okçu",                 building: "barracks"},
+                                    {id: "u53", name: "Akıncı",               building: "barracks"}, 
+                                    {id: "u54", name: "Keşifçi",              building: "stable"},
+                                    {id: "u55", name: "Step Binicisi",        building: "stable"},
+                                    {id: "u56", name: "Nişancı",              building: "stable"},
+                                    {id: "u57", name: "Marauder",             building: "stable"},
+                                    {id: "u58", name: "Koç Başı",             building: "workshop"},
+                                    {id: "u59", name: "Mancınık",             building: "workshop"},
+                                    {id: "u60", name: "Logades",              building: "residence"},
+                                    {id: "u61", name: "Göçmen",               building: "residence"}
                                 ],
 
                                 6: [ // MISIR
-                                    {id: "t1",  name: "Milis",                building: "barracks"},
-                                    {id: "t2",  name: "Ash Warden",           building: "barracks"},
-                                    {id: "t3",  name: "Khopesh Savasci",      building: "barracks"},
-                                    {id: "t4",  name: "Kesifci",              building: "stable"},
-                                    {id: "t5",  name: "Anhur Guard",          building: "stable"},
-                                    {id: "t6",  name: "Resheph Chariot",      building: "stable"},
-                                    {id: "t7",  name: "Koc Basi",             building: "workshop"},
-                                    {id: "t8",  name: "Mancinik",             building: "workshop"},
-                                    {id: "t9",  name: "Nomarch",              building: "residence"},
-                                    {id: "t10", name: "Yerlesimci",           building: "residence"}
+                                    {id: "u61", name: "Köle Milisi",          building: "barracks"},
+                                    {id: "u62", name: "Kül Bekçisi",          building: "barracks"},
+                                    {id: "u63", name: "Khopesh Savaşçısı",    building: "barracks"},
+                                    {id: "u64", name: "Sopdu Kaşifi",         building: "stable"},
+                                    {id: "u65", name: "Anhur Muhafızı",       building: "stable"},
+                                    {id: "u66", name: "Resheph Arabası",      building: "stable"},
+                                    {id: "u67", name: "Koç Başı",             building: "workshop"},
+                                    {id: "u68", name: "Taş Mancınığı",        building: "workshop"},
+                                    {id: "u69", name: "Nomarch",              building: "residence"},
+                                    {id: "u70", name: "Göçmen",               building: "residence"}
                                 ]
                             })
 
@@ -1139,19 +1127,49 @@ ApplicationWindow {
                             }
 
                             function getTroopCount(troopId) {
+                                // backend'den dorf1.php parser unitClass olarak u11, u12 dönüyor
                                 for (var i = 0; i < troops.length; i++) {
-                                    if (troops[i].unitClass === troopId || troops[i].unitClass === troopId.replace("t", "u")) {
+                                    if (troops[i].unitClass === troopId) {
                                         return parseInt(troops[i].count) || 0
                                     }
                                 }
                                 return 0
                             }
 
+                            function globalToRelativeId(globalId) {
+                                if (!globalId.startsWith("u")) return globalId
+                                var gid = parseInt(globalId.replace("u", ""))
+                                var rid = (gid - 1) % 10 + 1
+                                return "t" + rid
+                            }
+
                             function isTroopUnlocked(troopId) {
-                                for (var i = 0; i < trainableTroops.length; i++) {
-                                    if (trainableTroops[i].troopId === troopId) {
+                                // Önce hangi binaya ait olduğunu bulalım
+                                var buildingType = "barracks" 
+                                var troopsList = tribeTroops
+                                for (var t = 0; t < troopsList.length; t++) {
+                                    if (troopsList[t].id === troopId) {
+                                        buildingType = troopsList[t].building
+                                        break
+                                    }
+                                }
+
+                                var sourceList = []
+                                if (buildingType === "barracks") sourceList = trainableTroops
+                                else if (buildingType === "stable") sourceList = stableData.trainableTroops || []
+                                else if (buildingType === "workshop") sourceList = workshopData.trainableTroops || []
+                                
+                                var relativeId = globalToRelativeId(troopId)
+                                
+                                for (var i = 0; i < sourceList.length; i++) {
+                                    // Backend parser her zaman relative ID (t1, t2...) döndürür
+                                    // Bizim elimizdeki troopId global (u11, u21...) olabilir
+                                    // Bu yüzden convert edip karşılaştırıyoruz
+                                    var tid = sourceList[i].troopId 
+                                    if (tid === relativeId) {
                                         return true
                                     }
+                                    if (tid === troopId) return true
                                 }
                                 return false
                             }
@@ -1357,7 +1375,7 @@ ApplicationWindow {
                                                             visible: militaryCol.isAutoTrainTroop(modelData.id)
                                                             onClicked: {
                                                                 if (modelObj) {
-                                                                    modelObj.removeVillageTroop(selectedVillage())
+                                                                    modelObj.removeVillageTroop(selectedVillage(), modelData.building)
                                                                 }
                                                             }
                                                         }

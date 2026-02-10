@@ -16,7 +16,7 @@ class TroopQueueManager : public QObject {
 public:
   struct TroopConfig {
     int villageId;
-    QString troopId;  // "t1", "t2", ...
+    QString troopId; // "u1", "u11", ...
     QString troopName;
     QString building; // "barracks", "stable", "workshop"
 
@@ -26,19 +26,23 @@ public:
 
   explicit TroopQueueManager(QObject *parent = nullptr);
 
+  // Updated to include building type for specific removal/setting
   void setVillageTroop(int villageId, const QString &troopId,
                        const QString &troopName, const QString &building);
-  void removeVillageTroop(int villageId);
-  TroopConfig getVillageTroop(int villageId) const;
+  void removeVillageTroop(int villageId, const QString &building);
+
+  // Returns list of configs for a village (can be empty)
+  QList<TroopConfig> getVillageTroops(int villageId) const;
+
   QList<int> getConfiguredVillages() const;
-  bool hasConfig(int villageId) const;
+  bool hasConfig(int villageId, const QString &building) const;
 
   void loadConfig(const QString &filePath);
   void saveConfig(const QString &filePath);
 
   void processTraining(TravianDataFetcher *fetcher, const QVariantMap &allData);
 
-  // For UI
+  // For UI - Returns flattened list of all configs
   QVariantList allConfigs() const;
 
 signals:
@@ -50,7 +54,8 @@ private:
   int findMilitarySlot(const QVariantMap &villageData,
                        const QString &building) const;
 
-  QMap<int, TroopConfig> m_configs; // villageId -> config
+  // Key: VillageID -> Key: BuildingName -> Config
+  QMap<int, QMap<QString, TroopConfig>> m_configs;
   QString m_configFilePath;
 };
 

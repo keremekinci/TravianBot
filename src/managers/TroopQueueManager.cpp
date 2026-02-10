@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 
 TroopQueueManager::TroopQueueManager(QObject *parent) : QObject(parent) {}
 
@@ -17,7 +18,7 @@ QJsonObject TroopQueueManager::TroopConfig::toJson() const {
 
 TroopQueueManager::TroopConfig
 TroopQueueManager::TroopConfig::fromJson(int villageId,
-                                          const QJsonObject &obj) {
+                                         const QJsonObject &obj) {
   TroopConfig config;
   config.villageId = villageId;
   config.troopId = obj["troopId"].toString();
@@ -27,15 +28,16 @@ TroopQueueManager::TroopConfig::fromJson(int villageId,
 }
 
 void TroopQueueManager::setVillageTroop(int villageId, const QString &troopId,
-                                         const QString &troopName,
-                                         const QString &building) {
+                                        const QString &troopName,
+                                        const QString &building) {
   TroopConfig config;
   config.villageId = villageId;
   config.troopId = troopId;
   config.troopName = troopName;
   config.building = building;
 
-  m_configs[villageId] = config;
+  // Insert or update the config for this specific building in this village
+  m_configs[villageId][building] = config;
 
   if (!m_configFilePath.isEmpty()) {
     saveConfig(m_configFilePath);
@@ -44,30 +46,44 @@ void TroopQueueManager::setVillageTroop(int villageId, const QString &troopId,
   emit configChanged();
 }
 
-void TroopQueueManager::removeVillageTroop(int villageId) {
+void TroopQueueManager::removeVillageTroop(int villageId,
+                                           const QString &building) {
   if (!m_configs.contains(villageId))
     return;
 
-  m_configs.remove(villageId);
+  // Remove specific building config
+  if (m_configs[villageId].contains(building)) {
+    m_configs[villageId].remove(building);
 
-  if (!m_configFilePath.isEmpty()) {
-    saveConfig(m_configFilePath);
+    // If no more configs for this village, remove the village entry
+    if (m_configs[villageId].isEmpty()) {
+      m_configs.remove(villageId);
+    }
+
+    if (!m_configFilePath.isEmpty()) {
+      saveConfig(m_configFilePath);
+    }
+
+    emit configChanged();
   }
-
-  emit configChanged();
 }
 
-TroopQueueManager::TroopConfig
-TroopQueueManager::getVillageTroop(int villageId) const {
-  return m_configs.value(villageId);
+QList<TroopQueueManager::TroopConfig>
+TroopQueueManager::getVillageTroops(int villageId) const {
+  if (!m_configs.contains(villageId)) {
+    return {};
+  }
+  return m_configs[villageId].values();
 }
 
 QList<int> TroopQueueManager::getConfiguredVillages() const {
   return m_configs.keys();
 }
 
-bool TroopQueueManager::hasConfig(int villageId) const {
-  return m_configs.contains(villageId);
+bool TroopQueueManager::hasConfig(int villageId,
+                                  const QString &building) const {
+  return m_configs.contains(villageId) &&
+         m_configs[villageId].contains(building);
 }
 
 void TroopQueueManager::loadConfig(const QString &filePath) {
@@ -91,15 +107,42 @@ void TroopQueueManager::loadConfig(const QString &filePath) {
   QJsonObject villages = root["villages"].toObject();
   for (auto it = villages.begin(); it != villages.end(); ++it) {
     int villageId = it.key().toInt();
-    TroopConfig config = TroopConfig::fromJson(villageId, it.value().toObject());
-    m_configs[villageId] = config;
+    QJsonObject updatedBuildingMap = it.value().toObject();
+
+    // Check if it's the old format (directly a config object with "troopId")
+    // or new format (map of building -> config)
+    if (updatedBuildingMap.contains("troopId")) {
+      // OLD FORMAT: Convert to new format
+      TroopConfig config = TroopConfig::fromJson(villageId, updatedBuildingMap);
+      m_configs[villageId][config.building] = config;
+    } else {
+      // NEW FORMAT: Map of building -> config
+      for (auto bIt = updatedBuildingMap.begin();
+           bIt != updatedBuildingMap.end(); ++bIt) {
+        QString building = bIt.key();
+        TroopConfig config =
+            TroopConfig::fromJson(villageId, bIt.value().toObject());
+        m_configs[villageId][building] = config;
+      }
+    }
   }
 }
 
 void TroopQueueManager::saveConfig(const QString &filePath) {
   QJsonObject villages;
+
+  // Iterate all villages
   for (auto it = m_configs.constBegin(); it != m_configs.constEnd(); ++it) {
-    villages[QString::number(it.key())] = it.value().toJson();
+    int villageId = it.key();
+    QJsonObject buildingMap;
+
+    // Iterate all buildings for this village
+    const auto &innerMap = it.value();
+    for (auto bIt = innerMap.constBegin(); bIt != innerMap.constEnd(); ++bIt) {
+      buildingMap[bIt.key()] = bIt.value().toJson();
+    }
+
+    villages[QString::number(villageId)] = buildingMap;
   }
 
   QJsonObject root;
@@ -117,18 +160,21 @@ void TroopQueueManager::saveConfig(const QString &filePath) {
 QVariantList TroopQueueManager::allConfigs() const {
   QVariantList result;
   for (auto it = m_configs.constBegin(); it != m_configs.constEnd(); ++it) {
-    QVariantMap item;
-    item["villageId"] = it.key();
-    item["troopId"] = it.value().troopId;
-    item["troopName"] = it.value().troopName;
-    item["building"] = it.value().building;
-    result.append(item);
+    const auto &innerMap = it.value();
+    for (auto bIt = innerMap.constBegin(); bIt != innerMap.constEnd(); ++bIt) {
+      QVariantMap item;
+      item["villageId"] = it.key();
+      item["troopId"] = bIt.value().troopId;
+      item["troopName"] = bIt.value().troopName;
+      item["building"] = bIt.value().building;
+      result.append(item);
+    }
   }
   return result;
 }
 
 int TroopQueueManager::findMilitarySlot(const QVariantMap &villageData,
-                                         const QString &building) const {
+                                        const QString &building) const {
   // GID mapping: barracks=19, stable=20, workshop=21
   int targetGid = 0;
   if (building == "barracks")
@@ -154,7 +200,7 @@ int TroopQueueManager::findMilitarySlot(const QVariantMap &villageData,
 }
 
 void TroopQueueManager::processTraining(TravianDataFetcher *fetcher,
-                                         const QVariantMap &allData) {
+                                        const QVariantMap &allData) {
   if (!fetcher || m_configs.isEmpty()) {
     return;
   }
@@ -167,17 +213,21 @@ void TroopQueueManager::processTraining(TravianDataFetcher *fetcher,
     }
 
     QVariantMap villageData = allData[villageKey].toMap();
-    const TroopConfig &config = m_configs[villageId];
 
-    // Find the military building slot
-    int slotId = findMilitarySlot(villageData, config.building);
-    if (slotId < 0) {
-      emit trainingFailed(villageId,
-                          QString("%1 binası bulunamadı").arg(config.building));
-      continue;
+    // Iterate through all configured buildings for this village
+    const auto &innerMap = m_configs[villageId];
+    for (const TroopConfig &config : innerMap) {
+
+      // Find the military building slot
+      int slotId = findMilitarySlot(villageData, config.building);
+      if (slotId < 0) {
+        emit trainingFailed(
+            villageId, QString("%1 binası bulunamadı").arg(config.building));
+        continue;
+      }
+
+      // Trigger training via fetcher (pass troopName from config)
+      fetcher->trainTroops(villageId, slotId, config.troopId, config.troopName);
     }
-
-    // Trigger training via fetcher (pass troopName from config)
-    fetcher->trainTroops(villageId, slotId, config.troopId, config.troopName);
   }
 }
