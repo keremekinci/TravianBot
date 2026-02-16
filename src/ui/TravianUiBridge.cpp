@@ -19,7 +19,8 @@ static const QString COOKIE_CACHE_PATH =
     "/Users/kekinci/Desktop/test/config/cookie_cache.json";
 
 TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
-  m_telegramNotifier = new TelegramNotifier(this);
+  m_telegramNotifier = new TelegramNotifier(this);        // General activities
+  m_telegramAttackNotifier = new TelegramNotifier(this);  // Attack alerts only
   m_fetcher = new TravianDataFetcher(this);
 
   // Initialize build queue manager
@@ -64,6 +65,13 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                             .arg(villageId)
                             .arg(listId),
                         "info");
+
+            if (m_telegramNotifier) {
+              m_telegramNotifier->sendNotification(
+                  QString("🌾 Köy %1: Yağma listesi %2 çalıştırılıyor...")
+                      .arg(villageId)
+                      .arg(listId));
+            }
           });
 
   // Initialize account model
@@ -81,6 +89,13 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                             .arg(buildingName)
                             .arg(villageId),
                         "success");
+
+            if (m_telegramNotifier) {
+              m_telegramNotifier->sendNotification(
+                  QString("🏗️ Köy %1: %2 yükseltme başlatıldı")
+                      .arg(villageId)
+                      .arg(buildingName));
+            }
           });
 
   // Task completed - building reached target level
@@ -93,6 +108,11 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                 "Kuyruk görevi tamamlandı (Köy %1) - hedef seviyeye ulaşıldı")
                 .arg(villageId),
             "success");
+
+        if (m_telegramNotifier) {
+          m_telegramNotifier->sendNotification(
+              QString("✅ Köy %1: Yapı hedef seviyeye ulaştı!").arg(villageId));
+        }
       });
 
   // Builder busy - wait until construction finishes + 15 seconds
@@ -199,6 +219,10 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
     setLoading(false);
     m_sessionCheckTimer->start();
 
+    if (m_telegramNotifier) {
+      m_telegramNotifier->sendNotification("✅ Travian'a başarıyla giriş yapıldı!");
+    }
+
     // Cookie'leri kaydet (gelecek seferler için)
     m_fetcher->saveCookiesToFile(COOKIE_CACHE_PATH);
 
@@ -217,6 +241,10 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
             setStatus("❌ Giriş başarısız: " + error);
             logActivity("Giriş başarısız: " + error, "error");
             setLoading(false);
+
+            if (m_telegramNotifier) {
+              m_telegramNotifier->sendNotification("❌ Giriş başarısız: " + error);
+            }
           });
 
   connect(m_fetcher, &TravianDataFetcher::villagesDiscovered, this,
@@ -404,12 +432,27 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                           .arg(villageId)
                           .arg(listId),
                       "success");
+
+          if (m_telegramNotifier) {
+            m_telegramNotifier->sendNotification(
+                QString("✅ Köy %1: Yağma listesi %2 başarıyla başlatıldı")
+                    .arg(villageId)
+                    .arg(listId));
+          }
         } else {
           logActivity(QString("Yağma listesi hatası (Köy %1, Liste %2): %3")
                           .arg(villageId)
                           .arg(listId)
                           .arg(message),
                       "error");
+
+          if (m_telegramNotifier) {
+            m_telegramNotifier->sendNotification(
+                QString("⚠️ Köy %1: Yağma listesi %2 hatası - %3")
+                    .arg(villageId)
+                    .arg(listId)
+                    .arg(message));
+          }
         }
       });
 
@@ -423,11 +466,26 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                               .arg(count)
                               .arg(troopName),
                           "success");
+
+              if (m_telegramNotifier) {
+                m_telegramNotifier->sendNotification(
+                    QString("⚔️ Köy %1: %2 adet %3 eğitimi başlatıldı")
+                        .arg(villageId)
+                        .arg(count)
+                        .arg(troopName));
+              }
             } else {
               logActivity(QString("Asker eğitimi hatası (Köy %1): %2")
                               .arg(villageId)
                               .arg(message),
                           "error");
+
+              if (m_telegramNotifier) {
+                m_telegramNotifier->sendNotification(
+                    QString("⚠️ Köy %1: Asker eğitimi hatası - %2")
+                        .arg(villageId)
+                        .arg(message));
+              }
             }
           });
 
@@ -436,11 +494,19 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
     qWarning() << "[AUTO-LOGIN] Session expired - attempting automatic re-login...";
     logActivity("Oturum süresi doldu - otomatik giriş yapılıyor...", "warning");
 
+    if (m_telegramNotifier) {
+      m_telegramNotifier->sendNotification("🔄 Oturum süresi doldu - otomatik giriş yapılıyor...");
+    }
+
     if (!m_username.isEmpty() && !m_password.isEmpty()) {
       m_fetcher->performLogin(m_username, m_password);
     } else {
       qCritical() << "[AUTO-LOGIN] Cannot auto-login - credentials not available!";
       logActivity("HATA: Otomatik giriş yapılamadı - kullanıcı bilgileri eksik!", "error");
+
+      if (m_telegramNotifier) {
+        m_telegramNotifier->sendNotification("❌ HATA: Otomatik giriş yapılamadı - kullanıcı bilgileri eksik!");
+      }
     }
   });
 
@@ -459,8 +525,8 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                                 .arg(villageId)
                                 .arg(currentCount);
 
-              if (m_telegramNotifier) {
-                m_telegramNotifier->sendNotification(msg);
+              if (m_telegramAttackNotifier) {
+                m_telegramAttackNotifier->sendNotification(msg);
                 logActivity("Telegram saldırı bildirimi gönderildi", "warning");
               }
             }
@@ -531,18 +597,19 @@ void TravianUiBridge::loadSettings() {
       settings.value("Server/baseUrl", "https://ts30.x3.europe.travian.com")
           .toString();
 
-  // Telegram settings
-  QString defaultBotToken = "8265260297:AAFoM_IHCpuinuhUxcuCtQSU399FU7jbqBE";
-  QString botToken =
-      settings.value("Telegram/botToken", defaultBotToken).toString().trimmed();
-  if (botToken.isEmpty()) {
-    botToken = defaultBotToken;
-  }
-  // Default ChatID removed - user must provide it
+  // Telegram settings - Only chatId from settings, bot tokens hardcoded
   QString chatId = settings.value("Telegram/chatId", "").toString().trimmed();
+
+  // Hardcoded bot tokens
+  QString botToken = "7345411384:AAGvgscYXfFpBqqJy0PPqJqXcJdOasZGQpg";        // General activities
+  QString attackBotToken = "8265260297:AAFoM_IHCpuinuhUxcuCtQSU399FU7jbqBE";  // Attack alerts
 
   if (m_telegramNotifier) {
     m_telegramNotifier->setCredentials(botToken, chatId);
+  }
+
+  if (m_telegramAttackNotifier) {
+    m_telegramAttackNotifier->setCredentials(attackBotToken, chatId);
   }
 
   // Credentials

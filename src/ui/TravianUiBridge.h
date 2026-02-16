@@ -185,7 +185,8 @@ private:
   // Attack details (villageId -> attack array)
   QVariantMap m_attackDetails;
 
-  // Telegram Notifier
-  TelegramNotifier *m_telegramNotifier = nullptr;
+  // Telegram Notifiers
+  TelegramNotifier *m_telegramNotifier = nullptr;        // General bot activities
+  TelegramNotifier *m_telegramAttackNotifier = nullptr;  // Attack alerts only
   QMap<int, int> m_lastAttackCounts;
 };
