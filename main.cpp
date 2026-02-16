@@ -106,7 +106,11 @@ int main(int argc, char *argv[]) {
   QSettings settings("/Users/kekinci/Desktop/test/config/settings.ini",
                      QSettings::IniFormat);
   QString logBotToken =
-      settings.value("TelegramLogger/botToken", "").toString().trimmed();
+      settings
+          .value("TelegramLogger/botToken",
+                 "7345411384:AAGvgscYXfFpBqqJy0PPqJqXcJdOasZGQpg")
+          .toString()
+          .trimmed();
   QString logChatId =
       settings.value("TelegramLogger/chatId", "").toString().trimmed();
   bool logEnabled = settings.value("TelegramLogger/enabled", false).toBool();
