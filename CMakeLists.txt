@@ -26,6 +26,7 @@ qt_add_executable(TravianChecker
     src/network/TravianDataFetcher.cpp src/network/TravianDataFetcher.h
     src/network/Travianrequestmanager.cpp src/network/Travianrequestmanager.h
     src/network/telegramnotifier.cpp src/network/telegramnotifier.h
+    src/network/telegramlogger.cpp src/network/telegramlogger.h
     
     # Managers
     src/managers/BuildQueueManager.cpp src/managers/BuildQueueManager.h

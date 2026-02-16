@@ -8,10 +8,12 @@
 #include <QMutex>
 #include <QTextStream>
 
+#include "src/network/telegramlogger.h"
 #include "src/network/telegramnotifier.h"
 #include "src/ui/TravianUiBridge.h"
 
 static QFile *g_logFile = nullptr;
+static TelegramLogger *g_telegramLogger = nullptr;
 static QMutex g_logMutex;
 
 void customMessageHandler(QtMsgType type, const QMessageLogContext &context,
@@ -50,6 +52,11 @@ void customMessageHandler(QtMsgType type, const QMessageLogContext &context,
 
   // Also write to stderr
   fprintf(stderr, "%s", logLine.toLocal8Bit().constData());
+
+  // Send to Telegram Logger
+  if (g_telegramLogger) {
+    g_telegramLogger->addLog(logLine);
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -75,6 +82,25 @@ int main(int argc, char *argv[]) {
   }
 
   QGuiApplication app(argc, argv);
+
+  // Setup Telegram Logger
+  g_telegramLogger = new TelegramLogger(&app);
+
+  // Load logger settings
+  QSettings settings("/Users/kekinci/Desktop/test/config/settings.ini",
+                     QSettings::IniFormat);
+  QString logBotToken =
+      settings.value("TelegramLogger/botToken", "").toString().trimmed();
+  QString logChatId =
+      settings.value("TelegramLogger/chatId", "").toString().trimmed();
+  bool logEnabled = settings.value("TelegramLogger/enabled", false).toBool();
+
+  if (!logBotToken.isEmpty() && !logChatId.isEmpty()) {
+    g_telegramLogger->setCredentials(logBotToken, logChatId);
+    g_telegramLogger->setEnabled(logEnabled);
+    qInfo() << "Telegram Remote Logger initialized (Enabled:" << logEnabled
+            << ")";
+  }
 
   qInfo() << "Travian Bot başlatılıyor...";
 
