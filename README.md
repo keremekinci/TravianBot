@@ -11,6 +11,7 @@ Modern QML arayüzüne sahip Qt/C++ tabanlı Travian otomasyon botu.
 - 🌾 **Çiftlik Listeleri** - Otomatik yağma saldırıları
 - 📊 **Kaynak Takibi** - Gerçek zamanlı kaynak ve üretim izleme
 - 🔄 **Akıllı Yenileme** - İnşaat sürelerine göre yenileme aralığı ayarlama
+- 🔔 **Telegram Bildirimleri** - Gelen saldırılarda telefona anlık bildirim
 - 🎨 **Modern Arayüz** - Sekmeli temiz QML arayüzü
 
 ## Gereksinimler
@@ -105,6 +106,11 @@ make
 5. **İnşaat Kuyruğu**: Otomatik inşaat kuyruğunu yönet
 6. **Askerler Sekmesi**: Asker eğitimini yapılandır
 7. **Çiftlik Listeleri**: Otomatik yağma saldırılarını ayarla
+8. **Telegram Bildirimleri**: 
+   - `settings.ini` dosyasına `[Telegram]` bölümü ekle
+   - `chatId=SENIN_CHAT_IDN` satırını ekle (Chat ID'ni öğrenmek için botla konuş)
+   - Uygulama saldırı tespit ettiğinde otomatik bildirim gönderir
+   - **Not:** Chat ID girilmesi zorunludur.
 
 ## Güvenlik Notları
 

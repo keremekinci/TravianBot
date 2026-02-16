@@ -57,6 +57,20 @@ public:
     static QString decodeTurkishUnicode(const QString &text);
 
     static QJsonObject extractEmbeddedJson(const QString& html);
+
+    /**
+     * @brief Extract village list with attack information from embedded JSON
+     * @param html Raw HTML content
+     * @return List of villages with attack data
+     */
+    static QVariantList extractVillageListWithAttacks(const QString& html);
+
+    /**
+     * @brief Extract incoming troop movements from rally point HTML
+     * @param html Raw HTML content from rally point page (tt=1)
+     * @return List of incoming movements with timing data
+     */
+    static QVariantList extractIncomingMovements(const QString& html);
 };
 
 #endif // HTMLPARSER_H

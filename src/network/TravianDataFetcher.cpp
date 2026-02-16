@@ -13,6 +13,7 @@
 #include <QNetworkCookieJar>
 #include <QRandomGenerator>
 #include <QUrlQuery>
+#include <zlib.h>
 
 // ============================================================================
 // Constructor / Destructor
@@ -35,24 +36,200 @@ TravianDataFetcher::TravianDataFetcher(QObject *parent)
           });
 
   // Initialize user-agent list for anti-bot protection
+  // Güncel User-Agent listesi — oturum başında bir tanesi seçilir ve sabit kalır
   m_userAgents = {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
-      "like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "like Gecko) Chrome/133.0.0.0 Safari/537.36",
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, "
-      "like Gecko) Chrome/119.0.0.0 Safari/537.36",
+      "like Gecko) Chrome/132.0.0.0 Safari/537.36",
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
-      "(KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 "
-      "Firefox/121.0",
+      "(KHTML, like Gecko) Version/18.3 Safari/605.1.15",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 "
+      "Firefox/134.0",
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0",
+      "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-      "Chrome/120.0.0.0 Safari/537.36"};
+      "Chrome/133.0.0.0 Safari/537.36"};
+
+  // Oturum boyunca sabit UA kullan (her request'te farklı UA göndermek şüpheli)
+  m_sessionUserAgent = getRandomUserAgent();
+
+  // Cookie auto-refresh tracking
+  m_lastCookieSaveTime = QDateTime::currentDateTime();
 }
 
 TravianDataFetcher::~TravianDataFetcher() = default;
+
+// ============================================================================
+// Connection Stability Helpers
+// ============================================================================
+
+QByteArray TravianDataFetcher::decompressGzip(const QByteArray &data) {
+  if (data.size() < 2)
+    return data;
+  // Check gzip magic bytes (0x1f 0x8b)
+  if ((unsigned char)data[0] != 0x1f || (unsigned char)data[1] != 0x8b)
+    return data;
+
+  z_stream strm;
+  memset(&strm, 0, sizeof(strm));
+  // 15 + 32 tells zlib to auto-detect gzip or zlib format
+  if (inflateInit2(&strm, 15 + 32) != Z_OK)
+    return data;
+
+  strm.avail_in = data.size();
+  strm.next_in = (Bytef *)data.constData();
+
+  QByteArray output;
+  char buffer[32768];
+  int ret;
+  do {
+    strm.avail_out = sizeof(buffer);
+    strm.next_out = (Bytef *)buffer;
+    ret = inflate(&strm, Z_NO_FLUSH);
+    if (ret != Z_OK && ret != Z_STREAM_END)
+      break;
+    output.append(buffer, sizeof(buffer) - strm.avail_out);
+  } while (ret != Z_STREAM_END);
+
+  inflateEnd(&strm);
+
+  if (output.isEmpty()) {
+    qWarning() << "[GZIP] Decompression failed, returning raw data ("
+               << data.size() << "bytes)";
+    return data;
+  }
+  qDebug() << "[GZIP] Decompressed" << data.size() << "->" << output.size()
+           << "bytes";
+  return output;
+}
+
+void TravianDataFetcher::refreshCookiesFromResponse(QNetworkReply *reply) {
+  Q_UNUSED(reply);
+  if (m_cookieCachePath.isEmpty())
+    return;
+
+  // Qt's cookie jar is already updated automatically from set-cookie headers
+  // We just need to check if we should persist to disk
+  QList<QNetworkCookie> cookies =
+      m_networkManager->cookieJar()->cookiesForUrl(QUrl(m_baseUrl));
+  QString currentJwt;
+  for (const QNetworkCookie &c : cookies) {
+    if (c.name() == "JWT") {
+      currentJwt = QString::fromUtf8(c.value());
+      break;
+    }
+  }
+
+  bool jwtChanged = (!currentJwt.isEmpty() && currentJwt != m_lastJwtValue);
+  bool timeElapsed =
+      m_lastCookieSaveTime.secsTo(QDateTime::currentDateTime()) >= 600;
+
+  if (jwtChanged || timeElapsed) {
+    m_lastJwtValue = currentJwt;
+    m_lastCookieSaveTime = QDateTime::currentDateTime();
+    saveCookiesToFile(m_cookieCachePath);
+    qDebug() << "[COOKIE] Auto-saved cookies (jwtChanged:" << jwtChanged
+             << "timeElapsed:" << timeElapsed << ")";
+  }
+}
+
+bool TravianDataFetcher::shouldRetryNetworkError(
+    QNetworkReply::NetworkError error) const {
+  switch (error) {
+  case QNetworkReply::RemoteHostClosedError:       // GOAWAY / shutdown
+  case QNetworkReply::ConnectionRefusedError:      // Connection refused
+  case QNetworkReply::TimeoutError:                // Request timeout
+  case QNetworkReply::TemporaryNetworkFailureError: // Temporary failure
+  case QNetworkReply::NetworkSessionFailedError:   // Session failed
+  case QNetworkReply::InternalServerError:         // 500
+  case QNetworkReply::ServiceUnavailableError:     // 503
+  case QNetworkReply::UnknownNetworkError:         // Unknown
+    return true;
+  default:
+    return false;
+  }
+}
+
+void TravianDataFetcher::resetNetworkManager() {
+  qWarning()
+      << "[NET] Resetting QNetworkAccessManager to clear stale connections";
+
+  // Save current cookies before destroying the old manager
+  QList<QNetworkCookie> cookies =
+      m_networkManager->cookieJar()->cookiesForUrl(QUrl(m_baseUrl));
+
+  // Disconnect old manager
+  disconnect(m_networkManager, nullptr, this, nullptr);
+  m_networkManager->deleteLater();
+
+  // Create new manager
+  m_networkManager = new QNetworkAccessManager(this);
+
+  // Re-establish the finished connection
+  connect(m_networkManager, &QNetworkAccessManager::finished, this,
+          &TravianDataFetcher::onRequestFinished);
+
+  // Re-establish SSL error ignoring
+  connect(m_networkManager, &QNetworkAccessManager::sslErrors,
+          [](QNetworkReply *reply, const QList<QSslError> &) {
+            reply->ignoreSslErrors();
+          });
+
+  // Restore cookies
+  m_networkManager->cookieJar()->setCookiesFromUrl(cookies, QUrl(m_baseUrl));
+
+  m_consecutiveNetworkErrors = 0;
+  qDebug() << "[NET] Network manager reset complete, cookies restored";
+}
+
+// ============================================================================
+// Session Health Check
+// ============================================================================
+
+void TravianDataFetcher::checkSessionHealth() {
+  qDebug() << "[SESSION] Performing session health check";
+
+  QNetworkRequest request;
+  request.setUrl(QUrl(m_baseUrl + "/dorf1.php"));
+  request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
+  request.setRawHeader("Accept-Encoding", "identity");
+
+  QNetworkReply *reply = m_networkManager->get(request);
+  reply->setProperty("isSessionCheck", true);
+
+  connect(reply, &QNetworkReply::finished, this,
+          [this, reply]() { onSessionCheckFinished(reply); });
+}
+
+void TravianDataFetcher::onSessionCheckFinished(QNetworkReply *reply) {
+  refreshCookiesFromResponse(reply);
+
+  if (reply->error() != QNetworkReply::NoError) {
+    qWarning() << "[SESSION] Health check network error:"
+               << reply->errorString();
+    emit sessionHealthCheckResult(false);
+    reply->deleteLater();
+    return;
+  }
+
+  QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
+  QString html = QString::fromUtf8(rawData);
+  reply->deleteLater();
+
+  // Check for valid session indicators
+  bool isValid = html.contains("villageList") &&
+                 !html.contains("class=\"login\"") &&
+                 !html.contains("id=\"loginScene\"");
+
+  qDebug() << "[SESSION] Health check result:"
+           << (isValid ? "VALID" : "EXPIRED") << "(response:" << html.size()
+           << "bytes)";
+  emit sessionHealthCheckResult(isValid);
+}
 
 // ============================================================================
 // Configuration Loading
@@ -408,6 +585,7 @@ void TravianDataFetcher::performLogin(const QString &username,
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/120.0.0.0 Safari/537.36");
   request.setRawHeader("X-Requested-With", "XMLHttpRequest");
+  request.setRawHeader("Accept-Encoding", "identity");
 
   QNetworkReply *reply = m_networkManager->post(request, jsonData);
 
@@ -773,6 +951,7 @@ void TravianDataFetcher::upgradeBuilding(int villageId, int slotId) {
                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/120.0.0.0 Safari/537.36");
+  request.setRawHeader("Accept-Encoding", "identity");
 
   QNetworkReply *reply = m_networkManager->get(request);
   reply->setProperty("isUpgradeRequest", true);
@@ -796,10 +975,13 @@ void TravianDataFetcher::onUpgradeFinished(QNetworkReply *reply) {
     return;
   }
 
-  QString response = QString::fromUtf8(reply->readAll());
+  QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
+  QString response = QString::fromUtf8(rawData);
   int statusCode =
       reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
+  refreshCookiesFromResponse(reply);
   reply->deleteLater();
 
   if (upgradeStep == "getBuildPage") {
@@ -867,8 +1049,8 @@ void TravianDataFetcher::onUpgradeFinished(QNetworkReply *reply) {
     QNetworkRequest request;
     request.setUrl(QUrl(upgradeUrl));
 
-    // Anti-bot: Use rotating user-agent
-    request.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+    // Oturum boyunca sabit UA (gerçek tarayıcı gibi)
+    request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
 
     QString refererUrl = m_baseUrl + "/build.php?id=" + QString::number(slotId);
     if (villageId > 0) {
@@ -925,7 +1107,8 @@ void TravianDataFetcher::trainTroops(int villageId, int slotId,
 
   QNetworkRequest request;
   request.setUrl(QUrl(buildUrl));
-  request.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+  request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
+  request.setRawHeader("Accept-Encoding", "identity");
 
   QNetworkReply *reply = m_networkManager->get(request);
   reply->setProperty("isTrainRequest", true);
@@ -955,16 +1138,10 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
   }
 
   QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
   QString response = QString::fromUtf8(rawData);
 
-  // Handle gzip if needed
-  if (rawData.startsWith("\x1f\x8b")) {
-    response = QString::fromUtf8(qUncompress(rawData));
-    if (response.isEmpty()) {
-      response = QString::fromUtf8(rawData);
-    }
-  }
-
+  refreshCookiesFromResponse(reply);
   reply->deleteLater();
 
   if (trainStep == "getPage") {
@@ -1036,10 +1213,10 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     }
 
     if (maxCount <= 0) {
-      qWarning() << "[TROOP] Could not find max trainable count for" << troopId;
-      emit troopTrainingResult(villageId, false, troopName, 0,
-                               "Maksimum asker sayısı bulunamadı - kaynak "
-                               "yetersiz veya kışla meşgul olabilir");
+      qDebug() << "[TROOP] No troops available to train for" << troopName
+               << "at village" << villageId << "- resources insufficient or building busy";
+      // Don't emit error - this is expected when resources are low
+      // Timer will try again on next interval
       return;
     }
 
@@ -1053,10 +1230,18 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
       if (formAction.startsWith("/")) {
         formAction = m_baseUrl + formAction;
       }
-      qDebug() << "[TROOP] Form action:" << formAction;
+      // CRITICAL: Add newdid to form action to ensure POST is processed in correct village
+      if (!formAction.contains("newdid=") && villageId > 0) {
+        formAction += (formAction.contains("?") ? "&" : "?");
+        formAction += "newdid=" + QString::number(villageId);
+      }
+      qDebug() << "[TROOP] Form action (with newdid):" << formAction;
     } else {
-      // Fallback: use build.php
+      // Fallback: use build.php with newdid
       formAction = m_baseUrl + "/build.php?id=" + QString::number(slotId);
+      if (villageId > 0) {
+        formAction += "&newdid=" + QString::number(villageId);
+      }
       qDebug() << "[TROOP] Using fallback form action:" << formAction;
     }
 
@@ -1103,7 +1288,7 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     // Submit the form via POST
     QNetworkRequest postRequest;
     postRequest.setUrl(QUrl(formAction));
-    postRequest.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+    postRequest.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
     postRequest.setRawHeader("Content-Type",
                              "application/x-www-form-urlencoded");
     postRequest.setRawHeader(
@@ -1129,24 +1314,35 @@ void TravianDataFetcher::onTrainTroopFinished(QNetworkReply *reply) {
     QString troopName = reply->property("troopName").toString();
     int trainCount = reply->property("trainCount").toInt();
 
-    qDebug() << "[TROOP] Training POST response received for" << troopName;
+    qDebug() << "[TROOP] Training POST response received for" << troopName
+             << "at village" << villageId;
+
+    // Save response for debugging
+    QFile responseFile(QString("/Users/kekinci/Desktop/test/config/debug_train_response_%1.html").arg(villageId));
+    if (responseFile.open(QIODevice::WriteOnly)) {
+      responseFile.write(response.toUtf8());
+      responseFile.close();
+    }
 
     // Check for success indicators
     if (response.contains("buildingList") ||
         response.contains("under_progress") || response.contains("timer") ||
         response.contains("dur_r")) {
-      qInfo() << "[TROOP] Training started:" << trainCount << "x" << troopName;
+      qInfo() << "[TROOP] Training started:" << trainCount << "x" << troopName
+              << "at village" << villageId;
       emit troopTrainingResult(
           villageId, true, troopName, trainCount,
           QString("%1x %2 eğitim başlatıldı").arg(trainCount).arg(troopName));
     } else if (response.contains("notEnough") ||
                response.contains("enough resources")) {
+      qWarning() << "[TROOP] Not enough resources for" << troopName
+                 << "at village" << villageId;
       emit troopTrainingResult(villageId, false, troopName, 0,
                                "Yeterli kaynak yok");
     } else {
       // Usually successful - Travian redirects after training
       qInfo() << "[TROOP] Training likely started:" << trainCount << "x"
-              << troopName;
+              << troopName << "at village" << villageId;
       emit troopTrainingResult(
           villageId, true, troopName, trainCount,
           QString("%1x %2 eğitim başlatıldı").arg(trainCount).arg(troopName));
@@ -1199,8 +1395,8 @@ void TravianDataFetcher::processNextRequest() {
     QNetworkRequest request;
     request.setUrl(QUrl(req.url));
 
-    // Anti-bot: Use rotating user-agent
-    request.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+    // Oturum boyunca sabit UA (gerçek tarayıcı gibi)
+    request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
 
     // Anti-bot: Add referer header (simulate browser navigation)
     if (!m_lastReferer.isEmpty()) {
@@ -1213,8 +1409,8 @@ void TravianDataFetcher::processNextRequest() {
         "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     request.setRawHeader("Accept-Language",
                          "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7");
-    // NOTE: Accept-Encoding removed - Qt doesn't auto-decompress, causes
-    // parsing issues
+    // Explicitly request no compression to avoid gzip decompression issues
+    request.setRawHeader("Accept-Encoding", "identity");
     request.setRawHeader("DNT", "1");
     request.setRawHeader("Connection", "keep-alive");
     request.setRawHeader("Upgrade-Insecure-Requests", "1");
@@ -1238,12 +1434,13 @@ void TravianDataFetcher::processNextRequest() {
 // ============================================================================
 
 void TravianDataFetcher::onRequestFinished(QNetworkReply *reply) {
-  // Login, upgrade ve train request'lerini atla - onlar kendi handler'larında
-  // işleniyor
+  // Login, upgrade, train, farm, session check - skip, handled by their own
+  // slots
   if (reply->property("isLoginRequest").toBool() ||
       reply->property("isUpgradeRequest").toBool() ||
       reply->property("isTrainRequest").toBool() ||
-      reply->property("isFarmListRequest").toBool()) {
+      reply->property("isFarmListRequest").toBool() ||
+      reply->property("isSessionCheck").toBool()) {
     return;
   }
 
@@ -1252,14 +1449,64 @@ void TravianDataFetcher::onRequestFinished(QNetworkReply *reply) {
   QString pageName = reply->property("pageName").toString();
   bool isVillageListRequest = reply->property("isVillageListRequest").toBool();
 
+  // --- Fix 5: Network error retry with exponential backoff ---
   if (reply->error() != QNetworkReply::NoError) {
+    if (shouldRetryNetworkError(reply->error()) &&
+        m_currentRetryCount < MAX_REQUEST_RETRIES) {
+      m_currentRetryCount++;
+      int delayMs =
+          2000 * (1 << (m_currentRetryCount - 1)); // 2s, 4s, 8s backoff
+      qWarning() << "[FETCH] Network error:" << reply->errorString()
+                 << "- retry" << m_currentRetryCount << "/"
+                 << MAX_REQUEST_RETRIES << "in" << delayMs << "ms";
+
+      // Capture request info for retry
+      QUrl retryUrl = reply->url();
+      QJsonObject pageConfig = reply->property("pageConfig").toJsonObject();
+      int villageId = reply->property("villageId").toInt();
+      QString villageName = reply->property("villageName").toString();
+
+      reply->deleteLater();
+
+      QTimer::singleShot(delayMs, this,
+                         [this, pageName, retryUrl, pageConfig, villageId,
+                          villageName, isVillageListRequest]() {
+                           PendingRequest retryReq;
+                           retryReq.pageName = pageName;
+                           retryReq.pageConfig = pageConfig;
+                           retryReq.villageId = villageId;
+                           retryReq.villageName = villageName;
+                           retryReq.isVillageListRequest =
+                               isVillageListRequest;
+                           retryReq.url = retryUrl.toString();
+                           m_requestQueue.prepend(retryReq);
+                           processNextRequest();
+                         });
+      return;
+    }
+
+    // Exhausted retries or non-retryable error
+    m_currentRetryCount = 0;
+    m_consecutiveNetworkErrors++;
+    if (m_consecutiveNetworkErrors >= MAX_CONSECUTIVE_ERRORS_BEFORE_RESET) {
+      resetNetworkManager();
+    }
     emit fetchError(pageName, reply->errorString());
     reply->deleteLater();
     processNextRequest();
     return;
   }
 
-  QString html = QString::fromUtf8(reply->readAll());
+  // Success - reset retry/error counters
+  m_currentRetryCount = 0;
+  m_consecutiveNetworkErrors = 0;
+
+  // Refresh cookies from response headers
+  refreshCookiesFromResponse(reply);
+
+  QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
+  QString html = QString::fromUtf8(rawData);
 
   // Extract request info before deleting reply
   QJsonObject pageConfig = reply->property("pageConfig").toJsonObject();
@@ -1345,6 +1592,14 @@ void TravianDataFetcher::handlePageResponse(const QString &html,
     pageData["embeddedJson"] = embedded.toVariantMap();
   }
 
+  // Extract village list with attack information (only from dorf1/dorf2 pages to avoid redundant parsing)
+  if (req.pageName == "dorf1" || req.pageName == "dorf2") {
+    QVariantList villageListWithAttacks = HtmlParser::extractVillageListWithAttacks(html);
+    if (!villageListWithAttacks.isEmpty()) {
+      m_collectedData["villageListWithAttacks"] = villageListWithAttacks;
+    }
+  }
+
   if (req.villageId > 0) {
     storeVillageData(req.villageId, req.villageName, req.pageName, pageData);
     emit villageDataUpdated(
@@ -1356,6 +1611,81 @@ void TravianDataFetcher::handlePageResponse(const QString &html,
     // request ekle
     if (req.pageName == "dorf2") {
       enqueueMilitaryBuildingRequests(req.villageId, req.villageName, pageData);
+
+      // After dorf2 is saved, check for attacks and create attack summary from existing data
+      QVariantList villageListWithAttacks = m_collectedData["villageListWithAttacks"].toList();
+      for (const QVariant &villageVar : villageListWithAttacks) {
+        QVariantMap villageMap = villageVar.toMap();
+        if (villageMap["id"].toInt() == req.villageId) {
+          int attacksAmount = villageMap["incomingAttacksAmount"].toInt();
+          if (attacksAmount > 0) {
+            qDebug() << "[ATTACK] Village" << req.villageId << "has" << attacksAmount << "incoming attacks - creating attack summary from existing data";
+
+            // Create attack entries from the symbols data we already have
+            QVariantList attacks;
+            QVariantMap symbols = villageMap["incomingAttacksSymbols"].toMap();
+
+            int redCount = symbols["red"].toInt();
+            int yellowCount = symbols["yellow"].toInt();
+            int greenCount = symbols["green"].toInt();
+            int grayCount = symbols["gray"].toInt();
+
+            // Create placeholder attacks (we don't have exact timing from this data)
+            // But we can show the user that attacks are coming
+            for (int i = 0; i < redCount; i++) {
+              QVariantMap attack;
+              attack["type"] = "attack";
+              attack["symbol"] = "red";
+              attack["displayName"] = "Normal Saldırı";
+              attack["remainingSeconds"] = 0; // Unknown
+              attack["arrivalDateTime"] = "Bilinmiyor";
+              attacks.append(attack);
+            }
+            for (int i = 0; i < yellowCount; i++) {
+              QVariantMap attack;
+              attack["type"] = "raid";
+              attack["symbol"] = "yellow";
+              attack["displayName"] = "Yağma";
+              attack["remainingSeconds"] = 0;
+              attack["arrivalDateTime"] = "Bilinmiyor";
+              attacks.append(attack);
+            }
+            for (int i = 0; i < greenCount; i++) {
+              QVariantMap attack;
+              attack["type"] = "support";
+              attack["symbol"] = "green";
+              attack["displayName"] = "Destek";
+              attack["remainingSeconds"] = 0;
+              attack["arrivalDateTime"] = "Bilinmiyor";
+              attacks.append(attack);
+            }
+            for (int i = 0; i < grayCount; i++) {
+              QVariantMap attack;
+              attack["type"] = "other";
+              attack["symbol"] = "gray";
+              attack["displayName"] = "Diğer";
+              attack["remainingSeconds"] = 0;
+              attack["arrivalDateTime"] = "Bilinmiyor";
+              attacks.append(attack);
+            }
+
+            if (!attacks.isEmpty()) {
+              qDebug() << "[ATTACK] ✅ Emitting" << attacks.size() << "attacks for village" << req.villageId;
+              for (const QVariant &attack : attacks) {
+                qDebug() << "[ATTACK]   -" << attack.toMap()["displayName"].toString()
+                         << "(" << attack.toMap()["type"].toString() << ")";
+              }
+              emit incomingAttacksFetched(req.villageId, attacks);
+            } else {
+              qDebug() << "[ATTACK] ⚠️ No attacks created from symbols data (all counts were 0)";
+            }
+
+            // Fetch detailed timing from rally point HTML
+            //             fetchIncomingAttacks(req.villageId);
+          }
+          break;
+        }
+      }
     }
   } else {
     m_collectedData[req.pageName] = pageData;
@@ -1454,7 +1784,8 @@ void TravianDataFetcher::fetchFarmLists(int villageId) {
 
   QNetworkRequest request;
   request.setUrl(QUrl(farmUrl));
-  request.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+  request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
+  request.setRawHeader("Accept-Encoding", "identity");
 
   QNetworkReply *reply = m_networkManager->get(request);
   reply->setProperty("isFarmListRequest", true);
@@ -1470,13 +1801,24 @@ void TravianDataFetcher::executeFarmList(int villageId, int listId) {
   qDebug() << "[FARM] executeFarmList called - village:" << villageId
            << "listId:" << listId;
 
+  // Initialize retry info if needed
+  QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+  if (!m_farmRetries.contains(retryKey)) {
+    FarmRetryInfo info;
+    info.villageId = villageId;
+    info.listId = listId;
+    info.retryCount = 0;
+    m_farmRetries[retryKey] = info;
+  }
+
   // Step 1: Fetch farm list page to get active slot IDs
   QString fetchUrl =
       m_baseUrl + "/build.php?id=39&tt=99&newdid=" + QString::number(villageId);
 
   QNetworkRequest request;
   request.setUrl(QUrl(fetchUrl));
-  request.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+  request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
+  request.setRawHeader("Accept-Encoding", "identity");
 
   QNetworkReply *reply = m_networkManager->get(request);
   reply->setProperty("isFarmListRequest", true);
@@ -1511,9 +1853,10 @@ void TravianDataFetcher::sendFarmListPost(int villageId, int listId,
 
   QNetworkRequest apiRequest;
   apiRequest.setUrl(QUrl(apiUrl));
-  apiRequest.setRawHeader("User-Agent", getRandomUserAgent().toUtf8());
+  apiRequest.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
   apiRequest.setRawHeader("Content-Type", "application/json");
   apiRequest.setRawHeader("Accept", "application/json");
+  apiRequest.setRawHeader("Accept-Encoding", "identity");
   apiRequest.setRawHeader("X-Requested-With", "XMLHttpRequest");
   apiRequest.setRawHeader(
       "Referer", (m_baseUrl +
@@ -1546,29 +1889,53 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
     qWarning() << "[FARM] Network error:" << error << "status:" << statusCode
                << "body:" << QString::fromUtf8(errorBody).left(500);
 
-    // For farm execution, still emit result with error
-    if (farmStep == "executePost") {
+    // Retry logic for HTTP errors (400, 500, etc.)
+    if (farmStep == "executePost" || farmStep == "executeFetchSlots") {
       int listId = reply->property("listId").toInt();
-      emit farmListExecuted(villageId, listId, false,
-                            QString("HTTP %1: %2")
+      QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+      FarmRetryInfo &retryInfo = m_farmRetries[retryKey];
+
+      // Retry on 400, 500, or network errors
+      if ((statusCode >= 400 || statusCode == 0) && retryInfo.retryCount < MAX_FARM_RETRIES) {
+        retryInfo.retryCount++;
+        qWarning() << "[FARM] HTTP error" << statusCode << "for list" << listId
+                   << "- retry" << retryInfo.retryCount << "/" << MAX_FARM_RETRIES
+                   << "in" << FARM_RETRY_DELAY_MS << "ms";
+
+        reply->deleteLater();
+        QTimer::singleShot(FARM_RETRY_DELAY_MS, this, [this, villageId, listId]() {
+          executeFarmList(villageId, listId);
+        });
+        return;
+      }
+
+      // Max retries reached - report error
+      if (farmStep == "executePost") {
+        qWarning() << "[FARM] HTTP error" << statusCode << "for list" << listId
+                   << "after" << MAX_FARM_RETRIES << "retries - giving up";
+        emit farmListExecuted(villageId, listId, false,
+                            QString("HTTP %1: %2 (%3 deneme)")
                                 .arg(statusCode)
-                                .arg(QString::fromUtf8(errorBody).left(200)));
+                                .arg(QString::fromUtf8(errorBody).left(100))
+                                .arg(MAX_FARM_RETRIES));
+        retryInfo.retryCount = 0;
+      }
     }
     reply->deleteLater();
     return;
   }
 
+  // Extract all reply properties BEFORE deleteLater (Bonus fix)
+  int listId = reply->property("listId").toInt();
+  int httpStatusCode =
+      reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
   QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
   QString response = QString::fromUtf8(rawData);
 
-  // Handle gzip if needed
-  if (rawData.startsWith("\x1f\x8b")) {
-    response = QString::fromUtf8(qUncompress(rawData));
-    if (response.isEmpty()) {
-      response = QString::fromUtf8(rawData);
-    }
-  }
-
+  // Refresh cookies from response headers before deleting reply
+  refreshCookiesFromResponse(reply);
   reply->deleteLater();
 
   // Save debug HTML
@@ -1576,6 +1943,50 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
   if (debugFile.open(QIODevice::WriteOnly)) {
     debugFile.write(response.toUtf8());
     debugFile.close();
+  }
+
+  // Check for login/session expiration
+  if (response.contains("class=\"login\"") ||
+      response.contains("id=\"loginScene\"") ||
+      response.contains("GİRİŞ</a>") ||
+      (!response.contains("farmLists") && farmStep != "executePost")) {
+    qWarning() << "[FARM] Session expired - login page detected"
+               << "(response:" << response.size() << "bytes)";
+
+    // Trigger auto-login
+    emit sessionExpiredAutoLogin();
+
+    // Retry with session refresh for farm execution
+    if (farmStep == "executeFetchSlots") {
+      QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+      FarmRetryInfo &retryInfo = m_farmRetries[retryKey];
+
+      if (retryInfo.retryCount < MAX_FARM_RETRIES) {
+        retryInfo.retryCount++;
+        int retryDelay = FARM_RETRY_DELAY_MS * 2; // 4 seconds for session issues
+        qWarning() << "[FARM] Session expired for list" << listId
+                   << "- retry" << retryInfo.retryCount << "/" << MAX_FARM_RETRIES
+                   << "in" << retryDelay << "ms (longer delay for session issue)";
+
+        QTimer::singleShot(retryDelay, this, [this, villageId, listId]() {
+          executeFarmList(villageId, listId);
+        });
+        return;
+      } else {
+        qCritical() << "[FARM] Session expired for list" << listId
+                    << "after" << MAX_FARM_RETRIES << "retries - CRITICAL: Cookies may need refresh!";
+        emit farmListExecuted(villageId, listId, false,
+                            "Oturum süresi doldu - cookie güncellemesi gerekli");
+        retryInfo.retryCount = 0;
+        return;
+      }
+    }
+
+    // For fetchLists, just report error
+    if (farmStep == "fetchLists") {
+      emit farmListsFetched(villageId, QVariantList());
+      return;
+    }
   }
 
   if (farmStep == "fetchLists") {
@@ -1662,17 +2073,27 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
 
   else if (farmStep == "executeFetchSlots") {
     // Step 1 response: Parse farm list page to get slot IDs for target list
-    int listId = reply->property("listId").toInt();
+    // listId already extracted before deleteLater
 
-    qDebug() << "[FARM] Parsing farm list page for slot IDs - listId:"
-             << listId;
+    qDebug() << "[FARM] Parsing farm list page for slot IDs - listId:" << listId
+             << "response length:" << response.length();
 
     // Find slotsStates for the target farm list
     // Format in viewData:
     // "id":1691,...,"slotsStates":[{"id":56722,"isActive":true},...] We need to
     // find the slotsStates array for our specific list ID
-    QString listIdPattern = QString("\"id\":%1").arg(listId);
-    int listPos = response.indexOf(listIdPattern);
+    // Use regex for whitespace-tolerant matching: "id": 1691 or "id":1691
+    QRegularExpression farmListsStartRegex(R"~~("farmLists"\s*:\s*\[)~~");
+    QRegularExpressionMatch flStartMatch = farmListsStartRegex.match(response);
+    int searchStartPos = flStartMatch.hasMatch() ? flStartMatch.capturedStart() : 0;
+
+    QRegularExpression listIdRegex(
+        QString(R"~~("id"\s*:\s*%1\b)~~").arg(listId));
+    QRegularExpressionMatch listIdMatch = listIdRegex.match(response, searchStartPos);
+    int listPos = listIdMatch.hasMatch() ? listIdMatch.capturedStart() : -1;
+
+    qDebug() << "[FARM] List ID pattern found at position:" << listPos
+             << "(searchStart:" << searchStartPos << ")";
 
     QJsonArray activeSlotIds;
 
@@ -1681,10 +2102,15 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
       QString slotsStatesKey = "\"slotsStates\"";
       int slotsPos = response.indexOf(slotsStatesKey, listPos);
 
+      qDebug() << "[FARM] slotsStates found at position:" << slotsPos;
+
       // Make sure we didn't overshoot to the next list
       int nextListPos = response.indexOf("\"farmLists\"", listPos + 10);
       if (nextListPos < 0)
         nextListPos = response.length();
+
+      qDebug() << "[FARM] Next list position:" << nextListPos
+               << "slotsPos valid:" << (slotsPos >= 0 && slotsPos < nextListPos);
 
       if (slotsPos >= 0 && slotsPos < nextListPos) {
         // Find the array start
@@ -1707,26 +2133,69 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
           }
 
           QString slotsJson = response.mid(arrayStart, arrayEnd - arrayStart);
+          qDebug() << "[FARM] Extracted slotsStates JSON (first 200 chars):"
+                   << slotsJson.left(200);
+
           QJsonDocument slotsDoc = QJsonDocument::fromJson(slotsJson.toUtf8());
           QJsonArray slotsArray = slotsDoc.array();
 
+          qDebug() << "[FARM] Parsed slots array - total slots:" << slotsArray.size();
+
           for (const QJsonValue &slot : slotsArray) {
             QJsonObject slotObj = slot.toObject();
-            if (slotObj["isActive"].toBool()) {
-              activeSlotIds.append(slotObj["id"].toInt());
+            int slotId = slotObj["id"].toInt();
+            bool isActive = slotObj["isActive"].toBool();
+            qDebug() << "[FARM] Slot" << slotId << "isActive:" << isActive;
+
+            if (isActive) {
+              activeSlotIds.append(slotId);
             }
           }
+        } else {
+          qWarning() << "[FARM] Could not find array start after slotsStates";
         }
+      } else {
+        qWarning() << "[FARM] slotsStates not found or out of range";
       }
+    } else {
+      qWarning() << "[FARM] List ID" << listId << "not found in response";
     }
 
     qDebug() << "[FARM] Found" << activeSlotIds.size()
              << "active slots for list" << listId;
 
     if (activeSlotIds.isEmpty()) {
-      qWarning() << "[FARM] No active slots found for list" << listId;
-      emit farmListExecuted(villageId, listId, false, "Aktif slot bulunamadı");
-      return;
+      // Retry logic for empty slots
+      QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+      FarmRetryInfo &retryInfo = m_farmRetries[retryKey];
+
+      if (retryInfo.retryCount < MAX_FARM_RETRIES) {
+        retryInfo.retryCount++;
+        qWarning() << "[FARM] No active slots found for list" << listId
+                   << "- retry" << retryInfo.retryCount << "/" << MAX_FARM_RETRIES
+                   << "in" << FARM_RETRY_DELAY_MS << "ms";
+
+        QTimer::singleShot(FARM_RETRY_DELAY_MS, this, [this, villageId, listId]() {
+          executeFarmList(villageId, listId);
+        });
+        return;
+      } else {
+        // Max retries reached
+        qWarning() << "[FARM] No active slots found for list" << listId
+                   << "after" << MAX_FARM_RETRIES << "retries - giving up";
+        emit farmListExecuted(villageId, listId, false,
+                            "Aktif slot bulunamadı (" + QString::number(MAX_FARM_RETRIES) + " deneme)");
+
+        // Reset retry count for next execution
+        retryInfo.retryCount = 0;
+        return;
+      }
+    }
+
+    // Success - reset retry count
+    QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+    if (m_farmRetries.contains(retryKey)) {
+      m_farmRetries[retryKey].retryCount = 0;
     }
 
     // Proceed to Step 2: Send the farm list
@@ -1734,9 +2203,8 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
   }
 
   else if (farmStep == "executePost") {
-    int listId = reply->property("listId").toInt();
-    int statusCode =
-        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    // listId and httpStatusCode already extracted before deleteLater
+    int statusCode = httpStatusCode;
 
     qDebug() << "[FARM] Farm list execution response for list:" << listId
              << "status:" << statusCode;
@@ -1745,6 +2213,12 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
     // Parse response - Travian.api returns JSON
     QJsonDocument jsonDoc = QJsonDocument::fromJson(response.toUtf8());
     QJsonObject jsonObj = jsonDoc.object();
+
+    // Reset retry count on any response (success or error)
+    QString retryKey = QString("%1_%2").arg(villageId).arg(listId);
+    if (m_farmRetries.contains(retryKey)) {
+      m_farmRetries[retryKey].retryCount = 0;
+    }
 
     // Check for errors
     if (jsonObj.contains("errors") && !jsonObj["errors"].isNull()) {
@@ -1769,4 +2243,182 @@ void TravianDataFetcher::onFarmListFinished(QNetworkReply *reply) {
                                 response.left(200));
     }
   }
+}
+
+// ============================================================================
+// Incoming Attacks Implementation
+// ============================================================================
+
+void TravianDataFetcher::fetchIncomingAttacks(int villageId) {
+  qDebug() << "[ATTACK] fetchIncomingAttacks called for villageId:" << villageId;
+
+  // Find rally point (gid=16) slot ID from village data
+  QString villageKey = "village_" + QString::number(villageId);
+  QVariantMap villageData = m_collectedData.value(villageKey).toMap();
+  QVariantMap dorf2 = villageData["dorf2"].toMap();
+  QVariantList buildings = dorf2["buildings"].toList();
+
+  int rallyPointSlotId = -1;
+  for (const QVariant &building : buildings) {
+    QVariantMap b = building.toMap();
+    int gid = b["gid"].toInt();
+    if (gid == 16) {
+      rallyPointSlotId = b["slotId"].toInt();
+      break;
+    }
+  }
+
+  if (rallyPointSlotId == -1) {
+    qDebug() << "[ATTACK] ❌ Rally point not found in village" << villageId;
+    qDebug() << "[ATTACK] Available buildings in dorf2:";
+    for (const QVariant &building : buildings) {
+      QVariantMap b = building.toMap();
+      qDebug() << "[ATTACK]   - gid:" << b["gid"].toInt() << "slotId:" << b["slotId"].toInt() << "name:" << b["name"].toString();
+    }
+    emit incomingAttacksFetched(villageId, QVariantList());
+    return;
+  }
+
+  qDebug() << "[ATTACK] ✅ Found rally point at slotId:" << rallyPointSlotId;
+
+  // Fetch the rally point incoming movements tab
+  // IMPORTANT: Travian Legends requires both gid=16 and tt=1 parameters!
+  QString attackUrl = m_baseUrl +
+                    "/build.php?id=" + QString::number(rallyPointSlotId) +
+                    "&gid=16&tt=1";
+  if (villageId > 0) {
+    attackUrl += "&newdid=" + QString::number(villageId);
+  }
+
+  qDebug() << "[ATTACK] Fetching rally point with gid+tt:" << attackUrl;
+
+  QNetworkRequest request;
+  request.setUrl(QUrl(attackUrl));
+  request.setRawHeader("User-Agent", m_sessionUserAgent.toUtf8());
+  request.setRawHeader("Accept-Encoding", "identity");
+
+  QNetworkReply *reply = m_networkManager->get(request);
+  reply->setProperty("isAttackRequest", true);
+  reply->setProperty("villageId", villageId);
+  reply->setProperty("rallyPointSlotId", rallyPointSlotId);
+
+  connect(reply, &QNetworkReply::finished, this,
+          [this, reply]() { onIncomingAttacksFinished(reply); });
+}
+
+void TravianDataFetcher::onIncomingAttacksFinished(QNetworkReply *reply) {
+  int villageId = reply->property("villageId").toInt();
+
+  if (reply->error() != QNetworkReply::NoError) {
+    qWarning() << "[ATTACK] Network error:" << reply->errorString();
+    emit incomingAttacksFetched(villageId, QVariantList());
+    reply->deleteLater();
+    return;
+  }
+
+  QByteArray rawData = reply->readAll();
+  rawData = decompressGzip(rawData);
+  QString response = QString::fromUtf8(rawData);
+
+  qDebug() << "[ATTACK] Response size:" << response.length() << "bytes";
+  qDebug() << "[ATTACK] First 200 chars:" << response.left(200);
+
+  // Refresh cookies
+  refreshCookiesFromResponse(reply);
+  reply->deleteLater();
+
+  // Save debug HTML
+  QFile debugFile("/Users/kekinci/Desktop/test/config/debug_attacks_page.html");
+  if (debugFile.open(QIODevice::WriteOnly)) {
+    debugFile.write(response.toUtf8());
+    debugFile.close();
+    qDebug() << "[ATTACK] Saved debug HTML to:" << debugFile.fileName();
+  }
+
+  // Check for login/session expiration
+  if (response.contains("class=\"login\"") ||
+      response.contains("id=\"loginScene\"") ||
+      response.contains("GİRİŞ</a>")) {
+    qWarning() << "[ATTACK] Session expired - login page detected";
+
+    // Trigger auto-login
+    emit sessionExpiredAutoLogin();
+
+    emit incomingAttacksFetched(villageId, QVariantList());
+    return;
+  }
+
+  // Parse incoming movements using HTML parser (same approach as farm lists)
+  QVariantList movements = HtmlParser::extractIncomingMovements(response);
+
+  QVariantList attacks;
+
+  if (!movements.isEmpty()) {
+    qDebug() << "[ATTACK] Found" << movements.size() << "incoming movements";
+
+    for (const QVariant& movementVar : movements) {
+      QVariantMap mov = movementVar.toMap();
+
+      QVariantMap attack;
+      attack["id"] = mov["id"].toInt();
+
+      // Determine attack type from movementType or attackType
+      int movementType = mov["movementType"].toInt();
+      int attackType = mov["attackType"].toInt();
+
+      QString typeStr = "other";
+      QString displayName = "Diğer";
+
+      // Map Travian attack types
+      if (attackType == 3 || movementType == 3) {
+        typeStr = "attack";
+        displayName = "Normal Saldırı";
+      } else if (attackType == 4 || movementType == 4) {
+        typeStr = "raid";
+        displayName = "Yağma";
+      } else if (attackType == 2 || movementType == 2) {
+        typeStr = "reinforcement";
+        displayName = "Destek";
+      }
+
+      attack["type"] = typeStr;
+      attack["displayName"] = displayName;
+
+      // Extract timing information
+      if (mov.contains("arrivalTime")) {
+        qint64 arrivalTimestamp = mov["arrivalTime"].toLongLong();
+        QDateTime arrivalTime = QDateTime::fromSecsSinceEpoch(arrivalTimestamp);
+        attack["arrivalDateTime"] = arrivalTime.toString("yyyy-MM-dd HH:mm:ss");
+
+        qint64 now = QDateTime::currentSecsSinceEpoch();
+        qint64 remaining = arrivalTimestamp - now;
+        attack["remainingSeconds"] = static_cast<int>(remaining > 0 ? remaining : 0);
+
+        qDebug() << "[ATTACK]   -" << displayName << "arrives in" << remaining << "seconds at" << attack["arrivalDateTime"].toString();
+      } else if (mov.contains("remainingSeconds")) {
+        int remaining = mov["remainingSeconds"].toInt();
+        attack["remainingSeconds"] = remaining;
+
+        QDateTime arrivalTime = QDateTime::currentDateTime().addSecs(remaining);
+        attack["arrivalDateTime"] = arrivalTime.toString("yyyy-MM-dd HH:mm:ss");
+
+        qDebug() << "[ATTACK]   -" << displayName << "arrives in" << remaining << "seconds";
+      }
+
+      // Extract source info
+      if (mov.contains("fromVillageName")) {
+        attack["fromVillageName"] = mov["fromVillageName"].toString();
+      }
+      if (mov.contains("fromPlayerName")) {
+        attack["fromPlayerName"] = mov["fromPlayerName"].toString();
+      }
+
+      attacks.append(attack);
+    }
+  } else {
+    qDebug() << "[ATTACK] No movement data found in rally point HTML";
+  }
+
+  qDebug() << "[ATTACK] Parsed" << attacks.size() << "incoming attacks for village" << villageId;
+  emit incomingAttacksFetched(villageId, attacks);
 }

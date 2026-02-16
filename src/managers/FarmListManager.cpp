@@ -206,7 +206,18 @@ void FarmListManager::startListTimer(int listId) {
     return;
 
   const FarmConfig &config = m_configs[listId];
-  m_remainingSeconds[listId] = config.intervalMinutes * 60;
+  int baseSeconds = config.intervalMinutes * 60;
+
+  // +/- %20 random jitter (ör. 5dk = 240-360sn arası)
+  int jitterRange = baseSeconds / 5;
+  int jitter = QRandomGenerator::global()->bounded(-jitterRange, jitterRange + 1);
+  int finalSeconds = qMax(30, baseSeconds + jitter);
+
+  m_remainingSeconds[listId] = finalSeconds;
+
+  qDebug() << "[FARM_MGR] Timer set for list" << listId
+           << "base:" << baseSeconds << "s, jitter:" << jitter
+           << "s, total:" << finalSeconds << "s";
 
   // Ensure tick timer is running
   if (!m_tickTimer->isActive()) {

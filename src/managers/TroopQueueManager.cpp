@@ -6,13 +6,20 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
-TroopQueueManager::TroopQueueManager(QObject *parent) : QObject(parent) {}
+TroopQueueManager::TroopQueueManager(QObject *parent) : QObject(parent) {
+  // 1-second tick timer for countdown updates
+  m_tickTimer = new QTimer(this);
+  m_tickTimer->setInterval(1000);
+  connect(m_tickTimer, &QTimer::timeout, this, &TroopQueueManager::onTimer);
+}
 
 QJsonObject TroopQueueManager::TroopConfig::toJson() const {
   QJsonObject obj;
   obj["troopId"] = troopId;
   obj["troopName"] = troopName;
   obj["building"] = building;
+  obj["intervalMinutes"] = intervalMinutes;
+  obj["enabled"] = enabled;
   return obj;
 }
 
@@ -24,17 +31,21 @@ TroopQueueManager::TroopConfig::fromJson(int villageId,
   config.troopId = obj["troopId"].toString();
   config.troopName = obj["troopName"].toString();
   config.building = obj["building"].toString();
+  config.intervalMinutes = obj["intervalMinutes"].toInt(5);
+  config.enabled = obj["enabled"].toBool(false);
   return config;
 }
 
 void TroopQueueManager::setVillageTroop(int villageId, const QString &troopId,
                                         const QString &troopName,
-                                        const QString &building) {
+                                        const QString &building,
+                                        int intervalMinutes) {
   TroopConfig config;
   config.villageId = villageId;
   config.troopId = troopId;
   config.troopName = troopName;
   config.building = building;
+  config.intervalMinutes = intervalMinutes;
 
   // Insert or update the config for this specific building in this village
   m_configs[villageId][building] = config;
@@ -53,6 +64,9 @@ void TroopQueueManager::removeVillageTroop(int villageId,
 
   // Remove specific building config
   if (m_configs[villageId].contains(building)) {
+    // Stop timer first
+    stopVillageTimer(villageId, building);
+
     m_configs[villageId].remove(building);
 
     // If no more configs for this village, remove the village entry
@@ -160,13 +174,18 @@ void TroopQueueManager::saveConfig(const QString &filePath) {
 QVariantList TroopQueueManager::allConfigs() const {
   QVariantList result;
   for (auto it = m_configs.constBegin(); it != m_configs.constEnd(); ++it) {
+    int villageId = it.key();
     const auto &innerMap = it.value();
     for (auto bIt = innerMap.constBegin(); bIt != innerMap.constEnd(); ++bIt) {
+      const TroopConfig &config = bIt.value();
       QVariantMap item;
-      item["villageId"] = it.key();
-      item["troopId"] = bIt.value().troopId;
-      item["troopName"] = bIt.value().troopName;
-      item["building"] = bIt.value().building;
+      item["villageId"] = villageId;
+      item["troopId"] = config.troopId;
+      item["troopName"] = config.troopName;
+      item["building"] = config.building;
+      item["intervalMinutes"] = config.intervalMinutes;
+      item["enabled"] = config.enabled;
+      item["remainingSeconds"] = remainingSeconds(villageId, config.building);
       result.append(item);
     }
   }
@@ -199,35 +218,202 @@ int TroopQueueManager::findMilitarySlot(const QVariantMap &villageData,
   return -1;
 }
 
-void TroopQueueManager::processTraining(TravianDataFetcher *fetcher,
-                                        const QVariantMap &allData) {
-  if (!fetcher || m_configs.isEmpty()) {
+void TroopQueueManager::setVillageTroopEnabled(int villageId,
+                                                const QString &building,
+                                                bool enabled) {
+  if (!m_configs.contains(villageId) ||
+      !m_configs[villageId].contains(building)) {
     return;
   }
 
-  QList<int> villageIds = m_configs.keys();
-  for (int villageId : villageIds) {
-    QString villageKey = QString("village_%1").arg(villageId);
-    if (!allData.contains(villageKey)) {
-      continue;
-    }
+  m_configs[villageId][building].enabled = enabled;
 
-    QVariantMap villageData = allData[villageKey].toMap();
+  if (!m_configFilePath.isEmpty()) {
+    saveConfig(m_configFilePath);
+  }
 
-    // Iterate through all configured buildings for this village
-    const auto &innerMap = m_configs[villageId];
-    for (const TroopConfig &config : innerMap) {
+  emit configChanged();
 
-      // Find the military building slot
-      int slotId = findMilitarySlot(villageData, config.building);
-      if (slotId < 0) {
-        emit trainingFailed(
-            villageId, QString("%1 binası bulunamadı").arg(config.building));
-        continue;
+  if (enabled) {
+    startVillageTimer(villageId, building);
+    qDebug() << "[TROOP_MGR] Training enabled for village" << villageId
+             << building;
+  } else {
+    stopVillageTimer(villageId, building);
+    QString key = makeTimerKey(villageId, building);
+    m_remainingSeconds[key] = 0;
+    emit timerTick(villageId, building, 0);
+    qDebug() << "[TROOP_MGR] Training disabled for village" << villageId
+             << building;
+  }
+}
+
+QString TroopQueueManager::makeTimerKey(int villageId,
+                                        const QString &building) const {
+  return QString("%1:%2").arg(villageId).arg(building);
+}
+
+void TroopQueueManager::startTimers() {
+  qDebug() << "[TROOP_MGR] startTimers called, configs count:" << m_configs.size();
+
+  if (!m_tickTimer->isActive()) {
+    m_tickTimer->start();
+    qDebug() << "[TROOP_MGR] Tick timer started";
+  }
+
+  for (auto it = m_configs.begin(); it != m_configs.end(); ++it) {
+    int villageId = it.key();
+    const auto &innerMap = it.value();
+    for (auto bIt = innerMap.begin(); bIt != innerMap.end(); ++bIt) {
+      qDebug() << "[TROOP_MGR] Checking village" << villageId << bIt.key()
+               << "enabled:" << bIt.value().enabled;
+      if (bIt.value().enabled) {
+        startVillageTimer(villageId, bIt.key());
       }
-
-      // Trigger training via fetcher (pass troopName from config)
-      fetcher->trainTroops(villageId, slotId, config.troopId, config.troopName);
     }
   }
+}
+
+void TroopQueueManager::stopTimers() {
+  m_tickTimer->stop();
+  m_remainingSeconds.clear();
+}
+
+void TroopQueueManager::startVillageTimer(int villageId,
+                                          const QString &building) {
+  if (!m_configs.contains(villageId) ||
+      !m_configs[villageId].contains(building)) {
+    return;
+  }
+
+  const TroopConfig &config = m_configs[villageId][building];
+  int baseSeconds = config.intervalMinutes * 60;
+
+  // +/- %20 random jitter
+  int jitterRange = baseSeconds / 5;
+  int jitter = QRandomGenerator::global()->bounded(-jitterRange, jitterRange + 1);
+  int finalSeconds = qMax(30, baseSeconds + jitter);
+
+  QString key = makeTimerKey(villageId, building);
+  m_remainingSeconds[key] = finalSeconds;
+
+  qDebug() << "[TROOP_MGR] Timer set for village" << villageId << building
+           << "base:" << baseSeconds << "s, jitter:" << jitter
+           << "s, total:" << finalSeconds << "s";
+
+  // Ensure tick timer is running
+  if (!m_tickTimer->isActive()) {
+    m_tickTimer->start();
+  }
+}
+
+void TroopQueueManager::stopVillageTimer(int villageId,
+                                         const QString &building) {
+  QString key = makeTimerKey(villageId, building);
+  m_remainingSeconds.remove(key);
+}
+
+void TroopQueueManager::onTimer() {
+  // Countdown tick for all active timers
+  QList<QPair<int, QString>> expiredTimers;
+
+  for (auto it = m_remainingSeconds.begin(); it != m_remainingSeconds.end();
+       ++it) {
+    it.value()--;
+
+    // Extract villageId and building from key "villageId:building"
+    QStringList parts = it.key().split(":");
+    if (parts.size() != 2)
+      continue;
+
+    int villageId = parts[0].toInt();
+    QString building = parts[1];
+
+    emit timerTick(villageId, building, it.value());
+
+    if (it.value() <= 0) {
+      qDebug() << "[TROOP_MGR] Timer expired for village" << villageId << building;
+      expiredTimers.append(qMakePair(villageId, building));
+    }
+  }
+
+  // Execute training for expired timers
+  for (const auto &pair : expiredTimers) {
+    int villageId = pair.first;
+    QString building = pair.second;
+
+    if (m_configs.contains(villageId) &&
+        m_configs[villageId].contains(building) &&
+        m_configs[villageId][building].enabled) {
+      executeTrainingNow(villageId, building, m_fetcher, m_lastAllData);
+      // Reset timer
+      startVillageTimer(villageId, building);
+    }
+  }
+}
+
+void TroopQueueManager::executeTrainingNow(int villageId,
+                                           const QString &building,
+                                           TravianDataFetcher *fetcher,
+                                           const QVariantMap &allData) {
+  qDebug() << "[TROOP_MGR] executeTrainingNow called for village" << villageId << building;
+
+  m_fetcher = fetcher;
+  m_lastAllData = allData;
+
+  if (!fetcher) {
+    qDebug() << "[TROOP_MGR] No fetcher available";
+    return;
+  }
+
+  if (!m_configs.contains(villageId)) {
+    qDebug() << "[TROOP_MGR] Village" << villageId << "not in configs";
+    return;
+  }
+
+  if (!m_configs[villageId].contains(building)) {
+    qDebug() << "[TROOP_MGR] Building" << building << "not configured for village" << villageId;
+    return;
+  }
+
+  QString villageKey = QString("village_%1").arg(villageId);
+  if (!allData.contains(villageKey)) {
+    qDebug() << "[TROOP_MGR] Village data not found:" << villageKey;
+    emit trainingFailed(villageId,
+                       QString("Köy verisi bulunamadı: %1").arg(villageId));
+    return;
+  }
+
+  QVariantMap villageData = allData[villageKey].toMap();
+  const TroopConfig &config = m_configs[villageId][building];
+
+  // Find the military building slot
+  int slotId = findMilitarySlot(villageData, config.building);
+  if (slotId < 0) {
+    emit trainingFailed(
+        villageId, QString("%1 binası bulunamadı").arg(config.building));
+    return;
+  }
+
+  qDebug() << "[TROOP_MGR] Executing training for village" << villageId
+           << building << "troop:" << config.troopName;
+
+  // Trigger training via fetcher
+  fetcher->trainTroops(villageId, slotId, config.troopId, config.troopName);
+}
+
+int TroopQueueManager::remainingSeconds(int villageId,
+                                        const QString &building) const {
+  QString key = makeTimerKey(villageId, building);
+  return m_remainingSeconds.value(key, 0);
+}
+
+void TroopQueueManager::processTraining(TravianDataFetcher *fetcher,
+                                        const QVariantMap &allData) {
+  qDebug() << "[TROOP_MGR] processTraining called, active timers:" << m_remainingSeconds.size();
+  m_fetcher = fetcher;
+  m_lastAllData = allData;
+
+  // Start timers if not already running
+  startTimers();
 }

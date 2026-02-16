@@ -8,13 +8,14 @@
 #include <QMutex>
 #include <QTextStream>
 
+#include "src/network/telegramnotifier.h"
 #include "src/ui/TravianUiBridge.h"
 
 static QFile *g_logFile = nullptr;
 static QMutex g_logMutex;
 
 void customMessageHandler(QtMsgType type, const QMessageLogContext &context,
-                           const QString &msg) {
+                          const QString &msg) {
   QMutexLocker locker(&g_logMutex);
 
   QString level;
@@ -38,8 +39,7 @@ void customMessageHandler(QtMsgType type, const QMessageLogContext &context,
 
   QString timestamp =
       QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss.zzz");
-  QString logLine =
-      QString("[%1] [%2] %3\n").arg(timestamp, level, msg);
+  QString logLine = QString("[%1] [%2] %3\n").arg(timestamp, level, msg);
 
   // Write to log file
   if (g_logFile && g_logFile->isOpen()) {
@@ -67,7 +67,8 @@ int main(int argc, char *argv[]) {
     QTextStream stream(g_logFile);
     stream << "\n"
            << QString("=").repeated(80) << "\n"
-           << "[" << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
+           << "["
+           << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
            << "] === UYGULAMA BASLATILDI ===\n"
            << QString("=").repeated(80) << "\n";
     stream.flush();
@@ -81,6 +82,9 @@ int main(int argc, char *argv[]) {
 
   auto *model = new TravianUiBridge(&engine);
   engine.rootContext()->setContextProperty("TravianModel", model);
+
+  TelegramNotifier *telegramNotifier = new TelegramNotifier(&app);
+  engine.rootContext()->setContextProperty("telegram", telegramNotifier);
 
   engine.loadFromModule("TravianChecker", "Main");
 

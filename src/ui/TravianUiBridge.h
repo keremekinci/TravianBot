@@ -4,6 +4,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "src/network/telegramnotifier.h"
+
 class TravianDataFetcher;
 class BuildQueueManager;
 class TroopQueueManager;
@@ -36,6 +38,8 @@ class TravianUiBridge : public QObject {
       QString botMode READ botMode WRITE setBotMode NOTIFY botModeChanged)
   Q_PROPERTY(
       QVariantList troopConfigs READ troopConfigs NOTIFY troopConfigsChanged)
+  Q_PROPERTY(
+      QVariantMap attackDetails READ attackDetails NOTIFY attackDetailsChanged)
 
 public:
   explicit TravianUiBridge(QObject *parent = nullptr);
@@ -84,13 +88,20 @@ public:
   QVariantList troopConfigs() const;
   Q_INVOKABLE void setVillageTroop(int villageId, const QString &troopId,
                                    const QString &troopName,
-                                   const QString &building);
+                                   const QString &building,
+                                   int intervalMinutes);
   Q_INVOKABLE void removeVillageTroop(int villageId, const QString &building);
+  Q_INVOKABLE void
+  setVillageTroopEnabled(int villageId, const QString &building, bool enabled);
 
   // Activity log
   QVariantList activityLog() const { return m_activityLog; }
   Q_INVOKABLE void logActivity(const QString &message,
                                const QString &type = "info");
+  Q_INVOKABLE void testNotification();
+
+  // Attack details
+  QVariantMap attackDetails() const { return m_attackDetails; }
 
 signals:
   void allDataChanged();
@@ -104,11 +115,13 @@ signals:
   void buildQueueChanged();
   void farmConfigsChanged();
   void farmTimerTick();
+  void troopConfigsChanged();
+  void troopTimerTick();
   void availableFarmListsChanged();
   void currentVillageIdChanged();
   void activityLogChanged();
   void botModeChanged();
-  void troopConfigsChanged();
+  void attackDetailsChanged();
 
 private:
   void setLoading(bool v);
@@ -141,6 +154,7 @@ private:
   // Auto-refresh
   QTimer *m_refreshTimer = nullptr;
   QTimer *m_countdownTimer = nullptr;
+  QTimer *m_sessionCheckTimer = nullptr;
   bool m_autoRefreshEnabled = true;
   QString m_refreshMode = "long"; // "short" (4-5s) or "long" (5-10min)
   int m_nextRefreshIn = 0;        // seconds
@@ -167,4 +181,11 @@ private:
 
   // Activity log
   QVariantList m_activityLog;
+
+  // Attack details (villageId -> attack array)
+  QVariantMap m_attackDetails;
+
+  // Telegram Notifier
+  TelegramNotifier *m_telegramNotifier = nullptr;
+  QMap<int, int> m_lastAttackCounts;
 };

@@ -75,6 +75,49 @@ ApplicationWindow {
 
             Rectangle { Layout.fillWidth: true; color: "transparent" }
 
+            // Attack warning
+            Rectangle {
+                height: 36
+                radius: 6
+                color: "#ff5555"
+                Layout.preferredWidth: attackWarningRow.implicitWidth + 20
+                visible: {
+                    if (!allData || !allData.villageListWithAttacks) return false
+                    var total = 0
+                    var list = allData.villageListWithAttacks
+                    for (var i = 0; i < list.length; i++) {
+                        total += (list[i].incomingAttacksAmount || 0)
+                    }
+                    return total > 0
+                }
+
+                RowLayout {
+                    id: attackWarningRow
+                    anchors.centerIn: parent
+                    spacing: 8
+
+                    Label {
+                        text: "⚠️"
+                        font.pixelSize: 18
+                    }
+
+                    Label {
+                        text: {
+                            if (!allData || !allData.villageListWithAttacks) return ""
+                            var total = 0
+                            var list = allData.villageListWithAttacks
+                            for (var i = 0; i < list.length; i++) {
+                                total += (list[i].incomingAttacksAmount || 0)
+                            }
+                            return total + " Saldırı Geliyor!"
+                        }
+                        color: "white"
+                        font.pixelSize: 14
+                        font.bold: true
+                    }
+                }
+            }
+
             Label {
                 text: modelObj ? modelObj.statusText : "Model yok"
                 opacity: 0.7
@@ -84,6 +127,22 @@ ApplicationWindow {
                 text: (modelObj && modelObj.loading) ? "Yukleniyor..." : "Yenile"
                 enabled: modelObj ? !modelObj.loading : false
                 onClicked: { if (modelObj) modelObj.startFetch() }
+            }
+
+            Button {
+                text: "⚠️ Test"
+                palette.buttonText: "red"
+                onClicked: {
+                    console.log("Testing notification...");
+                    if (modelObj) {
+                        modelObj.testNotification();
+                    }
+                }
+            }
+
+            Button {
+                text: "ℹ️ Telegram"
+                onClicked: telegramInfoDialog.open()
             }
 
         }
@@ -131,6 +190,21 @@ ApplicationWindow {
                             radius: 8
                             color: (index === selectedVillageIndex) ? "#3a7bd5" : "#2a3142"
 
+                            // Get attack info for this village
+                            function getAttackInfo() {
+                                if (!allData || !allData.villageListWithAttacks) return null
+                                var list = allData.villageListWithAttacks
+                                for (var i = 0; i < list.length; i++) {
+                                    if (list[i].id === modelData.id) {
+                                        return list[i]
+                                    }
+                                }
+                                return null
+                            }
+
+                            property var attackInfo: getAttackInfo()
+                            property int attackCount: attackInfo ? (attackInfo.incomingAttacksAmount || 0) : 0
+
                             RowLayout {
                                 anchors.fill: parent
                                 anchors.margins: 8
@@ -142,6 +216,23 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     elide: Text.ElideRight
                                 }
+
+                                // Attack indicator
+                                Rectangle {
+                                    visible: attackCount > 0
+                                    width: 24
+                                    height: 24
+                                    radius: 12
+                                    color: "#ff5555"
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: attackCount
+                                        color: "white"
+                                        font.pixelSize: 10
+                                        font.bold: true
+                                    }
+                                }
+
                                 Label {
                                     text: "#" + modelData.id
                                     color: "white"
@@ -326,6 +417,229 @@ ApplicationWindow {
                                             Label { text: "-> Lv " + (modelData.level || "?"); color: "#4CAF50" }
                                             Label { text: modelData.remainingTime || ""; color: "#FF9800" }
                                         }
+                                    }
+                                }
+                            }
+
+                            // Gelen Saldırılar
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.margins: 12
+                                Layout.topMargin: 0
+                                height: attackInfoCol.implicitHeight + 28
+                                radius: 10
+                                color: "#3d1f1f"
+                                border.color: "#ff5555"
+                                border.width: 2
+
+                                property var villageAttackInfo: {
+                                    if (!allData || !allData.villageListWithAttacks) return null
+                                    var vid = selectedVillage()
+                                    var list = allData.villageListWithAttacks
+                                    for (var i = 0; i < list.length; i++) {
+                                        if (list[i].id === vid) {
+                                            return list[i]
+                                        }
+                                    }
+                                    return null
+                                }
+
+                                visible: villageAttackInfo !== null && villageAttackInfo.incomingAttacksAmount > 0
+
+                                ColumnLayout {
+                                    id: attackInfoCol
+                                    anchors.fill: parent
+                                    anchors.margins: 14
+                                    spacing: 12
+
+                                    RowLayout {
+                                        spacing: 10
+                                        Label {
+                                            text: "⚠️ GELEN SALDIRILAR"
+                                            color: "#ff5555"
+                                            font.pixelSize: 15
+                                            font.bold: true
+                                        }
+                                        Rectangle {
+                                            width: 32
+                                            height: 32
+                                            radius: 16
+                                            color: "#ff5555"
+                                            Label {
+                                                anchors.centerIn: parent
+                                                text: {
+                                                    var info = villageAttackInfo
+                                                    return info ? info.incomingAttacksAmount : 0
+                                                }
+                                                color: "white"
+                                                font.pixelSize: 14
+                                                font.bold: true
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        text: {
+                                            var info = villageAttackInfo
+                                            if (!info) return ""
+                                            var count = info.incomingAttacksAmount || 0
+                                            return count + " adet saldırı bu köye geliyor!"
+                                        }
+                                        color: "#ffaaaa"
+                                        font.pixelSize: 13
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    // Attack type indicators
+                                    RowLayout {
+                                        spacing: 15
+                                        visible: {
+                                            var info = villageAttackInfo
+                                            if (!info || !info.incomingAttacksSymbols) return false
+                                            var symbols = info.incomingAttacksSymbols
+                                            return (symbols.red > 0 || symbols.yellow > 0 || symbols.green > 0 || symbols.gray > 0)
+                                        }
+
+                                        Repeater {
+                                            model: {
+                                                var info = villageAttackInfo
+                                                if (!info || !info.incomingAttacksSymbols) return []
+                                                var symbols = info.incomingAttacksSymbols
+                                                var result = []
+                                                if (symbols.red > 0) result.push({color: "#ff5555", count: symbols.red, label: "Normal Saldırı"})
+                                                if (symbols.yellow > 0) result.push({color: "#ffeb3b", count: symbols.yellow, label: "Yağma"})
+                                                if (symbols.green > 0) result.push({color: "#4caf50", count: symbols.green, label: "Destek"})
+                                                if (symbols.gray > 0) result.push({color: "#888888", count: symbols.gray, label: "Diğer"})
+                                                return result
+                                            }
+
+                                            RowLayout {
+                                                spacing: 6
+                                                Rectangle {
+                                                    width: 12
+                                                    height: 12
+                                                    radius: 6
+                                                    color: modelData.color
+                                                }
+                                                Label {
+                                                    text: modelData.label + ": " + modelData.count
+                                                    color: "#ddd"
+                                                    font.pixelSize: 11
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Attack details from rally point
+                                    Repeater {
+                                        model: {
+                                            var vid = selectedVillage()
+                                            if (!modelObj || !modelObj.attackDetails) return []
+                                            return modelObj.attackDetails[vid.toString()] || []
+                                        }
+
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            height: attackDetailCol.implicitHeight + 16
+                                            radius: 6
+                                            color: "#2a1515"
+                                            border.color: "#ff5555"
+                                            border.width: 1
+
+                                            ColumnLayout {
+                                                id: attackDetailCol
+                                                anchors.fill: parent
+                                                anchors.margins: 8
+                                                spacing: 6
+
+                                                RowLayout {
+                                                    spacing: 8
+                                                    Label {
+                                                        text: {
+                                                            var type = modelData.type || "unknown"
+                                                            var typeLabel = {
+                                                                "attack": "⚔️ Normal Saldırı",
+                                                                "raid": "🏹 Yağma",
+                                                                "support": "🛡️ Destek",
+                                                                "reinforcement": "👥 Takviye"
+                                                            }
+                                                            return typeLabel[type] || "❓ " + type
+                                                        }
+                                                        color: "#ff8888"
+                                                        font.pixelSize: 12
+                                                        font.bold: true
+                                                    }
+                                                    Rectangle {
+                                                        width: 4
+                                                        height: 4
+                                                        radius: 2
+                                                        color: "#666"
+                                                    }
+                                                    Label {
+                                                        text: "ID: " + (modelData.id || "?")
+                                                        color: "#888"
+                                                        font.pixelSize: 10
+                                                    }
+                                                }
+
+                                                // Countdown timer - only show if we have timing data
+                                                Label {
+                                                    visible: modelData.remainingSeconds > 0 || modelData.arrivalDateTime !== "Bilinmiyor"
+                                                    text: {
+                                                        var remaining = modelData.remainingSeconds || 0
+                                                        if (remaining === 0) return "⏱️ Süre bilinmiyor - Rally Point'e bakın"
+                                                        var hours = Math.floor(remaining / 3600)
+                                                        var minutes = Math.floor((remaining % 3600) / 60)
+                                                        var seconds = remaining % 60
+                                                        return "⏱️ " + hours + " saat " + minutes + " dakika " + seconds + " saniye"
+                                                    }
+                                                    color: modelData.remainingSeconds > 0 ? "#ffcc00" : "#888"
+                                                    font.pixelSize: 13
+                                                    font.bold: modelData.remainingSeconds > 0
+                                                }
+
+                                                // Arrival time - only show if we have it
+                                                Label {
+                                                    visible: modelData.arrivalDateTime && modelData.arrivalDateTime !== "Bilinmiyor"
+                                                    text: "🕐 Varış: " + (modelData.arrivalDateTime || "")
+                                                    color: "#aaa"
+                                                    font.pixelSize: 11
+                                                }
+
+                                                // Info message when timing is unknown
+                                                Label {
+                                                    visible: (!modelData.arrivalDateTime || modelData.arrivalDateTime === "Bilinmiyor") && modelData.displayName
+                                                    text: "ℹ️ Detaylı bilgi için Rally Point'i açın"
+                                                    color: "#888"
+                                                    font.pixelSize: 10
+                                                    font.italic: true
+                                                }
+
+                                                // Origin village (if available)
+                                                Label {
+                                                    visible: modelData.originVillage !== undefined
+                                                    text: "📍 Kaynak: " + (modelData.originVillage ? JSON.stringify(modelData.originVillage) : "?")
+                                                    color: "#999"
+                                                    font.pixelSize: 10
+                                                    elide: Text.ElideRight
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        visible: {
+                                            var vid = selectedVillage()
+                                            if (!modelObj || !modelObj.attackDetails) return true
+                                            var attacks = modelObj.attackDetails[vid.toString()] || []
+                                            return attacks.length === 0
+                                        }
+                                        text: "⏰ Saldırı detayları yükleniyor..."
+                                        color: "#aaa"
+                                        font.pixelSize: 11
+                                        font.italic: true
                                     }
                                 }
                             }
@@ -1362,7 +1676,8 @@ ApplicationWindow {
                                                             visible: !militaryCol.isAutoTrainTroop(modelData.id)
                                                             onClicked: {
                                                                 if (modelObj) {
-                                                                    modelObj.setVillageTroop(selectedVillage(), modelData.id, modelData.name, modelData.building)
+                                                                    // Default 5 dakika aralık
+                                                                    modelObj.setVillageTroop(selectedVillage(), modelData.id, modelData.name, modelData.building, 5)
                                                                 }
                                                             }
                                                         }
@@ -1452,6 +1767,199 @@ ApplicationWindow {
                                                         color: "white"
                                                         font.pixelSize: 11
                                                     }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Otomatik Asker Basma Paneli
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.margins: 6
+                                Layout.topMargin: 0
+                                implicitHeight: autoTrainPanelContent.implicitHeight + 24
+                                radius: 10
+                                color: "#1f2430"
+
+                                ColumnLayout {
+                                    id: autoTrainPanelContent
+                                    anchors.fill: parent
+                                    anchors.margins: 12
+                                    spacing: 8
+
+                                    Label {
+                                        text: "Otomatik Asker Basma"
+                                        color: "white"
+                                        font.pixelSize: 15
+                                        font.bold: true
+                                    }
+
+                                    // Helper function to find config
+                                    function findTroopConfig(villageId, building) {
+                                        var configs = modelObj ? modelObj.troopConfigs : []
+                                        for (var i = 0; i < configs.length; i++) {
+                                            if (configs[i].villageId === villageId && configs[i].building === building) {
+                                                return configs[i]
+                                            }
+                                        }
+                                        return null
+                                    }
+
+                                    // Counter to force timer text re-evaluation
+                                    property int troopTickCounter: 0
+                                    Connections {
+                                        target: modelObj
+                                        function onTroopTimerTick() { autoTrainPanelContent.troopTickCounter++ }
+                                        function onTroopConfigsChanged() { autoTrainPanelContent.troopTickCounter++ }
+                                    }
+
+                                    // Configured troops for current village
+                                    property var currentVillageTroops: {
+                                        var tick = autoTrainPanelContent.troopTickCounter
+                                        var vid = selectedVillage()
+                                        var configs = modelObj ? modelObj.troopConfigs : []
+                                        var result = []
+                                        for (var i = 0; i < configs.length; i++) {
+                                            if (configs[i].villageId === vid) {
+                                                result.push(configs[i])
+                                            }
+                                        }
+                                        return result
+                                    }
+
+                                    Label {
+                                        visible: autoTrainPanelContent.currentVillageTroops.length === 0
+                                        text: "Bu köy için otomatik asker basma ayarı yok.\nAsker listesinden otomatik basma ekleyebilirsiniz."
+                                        color: "#888"
+                                        font.pixelSize: 12
+                                    }
+
+                                    // List of configured troops
+                                    Repeater {
+                                        model: autoTrainPanelContent.currentVillageTroops
+
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            height: troopItemCol.implicitHeight + 20
+                                            radius: 8
+                                            property var troopCfg: modelData
+                                            property bool isEnabled: troopCfg ? troopCfg.enabled : false
+                                            color: isEnabled ? "#1B3A2A" : "#1e2433"
+                                            border.color: isEnabled ? "#4CAF50" : "#2a3142"
+                                            border.width: 1
+
+                                            ColumnLayout {
+                                                id: troopItemCol
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.margins: 10
+                                                spacing: 8
+
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 10
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 2
+
+                                                        Label {
+                                                            text: modelData.troopName || "Asker"
+                                                            color: "white"
+                                                            font.pixelSize: 14
+                                                            font.bold: true
+                                                        }
+
+                                                        Label {
+                                                            text: {
+                                                                var buildingName = modelData.building === "barracks" ? "Kışla" :
+                                                                                 (modelData.building === "stable" ? "Ahır" : "Atölye")
+                                                                return buildingName + " | " + modelData.intervalMinutes + " dakika aralık"
+                                                            }
+                                                            color: "#888"
+                                                            font.pixelSize: 11
+                                                        }
+                                                    }
+
+                                                    // Enable/Disable toggle
+                                                    Rectangle {
+                                                        width: 80
+                                                        height: 30
+                                                        radius: 6
+                                                        color: toggleMa.pressed ? (modelData.enabled ? "#2a5230" : "#5a3030") :
+                                                               (toggleMa.containsMouse ? (modelData.enabled ? "#3a6340" : "#6a4040") :
+                                                               (modelData.enabled ? "#4CAF50" : "#7a5050"))
+
+                                                        Label {
+                                                            anchors.centerIn: parent
+                                                            text: modelData.enabled ? "Aktif" : "Pasif"
+                                                            color: "white"
+                                                            font.pixelSize: 11
+                                                            font.bold: true
+                                                        }
+
+                                                        MouseArea {
+                                                            id: toggleMa
+                                                            anchors.fill: parent
+                                                            hoverEnabled: true
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                if (modelObj) {
+                                                                    modelObj.setVillageTroopEnabled(
+                                                                        selectedVillage(),
+                                                                        modelData.building,
+                                                                        !modelData.enabled
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    // Remove button
+                                                    Rectangle {
+                                                        width: 80
+                                                        height: 30
+                                                        radius: 6
+                                                        color: removeMa.pressed ? "#8a3030" : (removeMa.containsMouse ? "#9a4040" : "#aa5050")
+
+                                                        Label {
+                                                            anchors.centerIn: parent
+                                                            text: "Kaldır"
+                                                            color: "white"
+                                                            font.pixelSize: 11
+                                                            font.bold: true
+                                                        }
+
+                                                        MouseArea {
+                                                            id: removeMa
+                                                            anchors.fill: parent
+                                                            hoverEnabled: true
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                if (modelObj) {
+                                                                    modelObj.removeVillageTroop(selectedVillage(), modelData.building)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Timer display (when enabled)
+                                                Label {
+                                                    visible: modelData.enabled
+                                                    text: {
+                                                        var tick = autoTrainPanelContent.troopTickCounter
+                                                        var remaining = modelData.remainingSeconds || 0
+                                                        if (remaining <= 0) return "Şimdi basılacak..."
+                                                        var m = Math.floor(remaining / 60)
+                                                        var s = remaining % 60
+                                                        return "Sonraki basım: " + m + "dk " + s + "sn"
+                                                    }
+                                                    color: "#66bb6a"
+                                                    font.pixelSize: 11
                                                 }
                                             }
                                         }
@@ -2044,5 +2552,86 @@ ApplicationWindow {
         }
     }
     } // Item wrapper
+
+    // Telegram Info Dialog
+    Dialog {
+        id: telegramInfoDialog
+        title: "Telegram Bildirim Kurulumu"
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        width: 450
+        standardButtons: Dialog.Ok
+        modal: true
+        
+        background: Rectangle {
+            color: "#1f2430"
+            border.color: "#3a7bd5"
+            radius: 8
+        }
+        
+        contentItem: ColumnLayout {
+            spacing: 12
+            width: parent.width
+
+            Label {
+                text: "Telegram bildirimlerini almak için:"
+                font.bold: true
+                font.pixelSize: 16
+                color: "white"
+            }
+
+            Label {
+                text: "1. Telegram'da <b>@travian_saldiri_uyari_bot</b>'u bulun."
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                textFormat: Text.RichText
+                color: "#ccc"
+                font.pixelSize: 13
+            }
+
+            Label {
+                text: "2. Bot ile konuşmayı başlatın (Start'a basın)."
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                color: "#ccc"
+                font.pixelSize: 13
+            }
+
+            Label {
+                text: "3. Bot size Chat ID'nizi söyleyebilir veya başka bir bot (örn: @usegetid_bot) ile ID'nizi öğrenebilirsiniz."
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                color: "#ccc"
+                font.pixelSize: 13
+            }
+
+            Label {
+                text: "4. <b>config/settings.ini</b> dosyasını açın ve şu ayarı yapın:"
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                textFormat: Text.RichText
+                color: "#ccc"
+                font.pixelSize: 13
+            }
+
+            TextArea {
+                text: "[Telegram]\nchatId=SENIN_CHAT_IDN"
+                readOnly: true
+                Layout.fillWidth: true
+                color: "#aaffaa"
+                font.family: "Courier"
+                background: Rectangle { color: "#111"; radius: 4; border.color: "#555" }
+            }
+            
+            Label {
+                text: "Not: Chat ID girilmezse bildirim çalışmaz."
+                font.italic: true
+                color: "#ff5555"
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+                font.pixelSize: 12
+            }
+        }
+    }
 }
 }

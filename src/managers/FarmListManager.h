@@ -5,6 +5,7 @@
 #include <QMap>
 #include <QObject>
 #include <QSet>
+#include <QRandomGenerator>
 #include <QTimer>
 #include <QVariantList>
 

@@ -146,3 +146,188 @@ QJsonObject HtmlParser::extractEmbeddedJson(const QString& html)
     // 2) fallback boş dön
     return QJsonObject();
 }
+
+QVariantList HtmlParser::extractVillageListWithAttacks(const QString& html)
+{
+    QVariantList result;
+
+    // Find villageList array directly - more reliable than parsing entire viewData
+    QRegularExpression rx(R"("villageList":\s*(\[[^\]]+\]))",
+                          QRegularExpression::DotMatchesEverythingOption);
+
+    QRegularExpressionMatch m = rx.match(html);
+    if (!m.hasMatch()) {
+        return result;
+    }
+
+    QString jsonStr = m.captured(1);
+
+    // Parse the JSON array directly
+    QJsonParseError err{};
+    QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &err);
+    if (doc.isNull() || !doc.isArray()) {
+        qWarning() << "[PARSER] Failed to parse villageList JSON:" << err.errorString();
+        return result;
+    }
+
+    QJsonArray villageList = doc.array();
+
+    // Convert to QVariantList
+    for (const QJsonValue &val : villageList) {
+        if (!val.isObject()) {
+            continue;
+        }
+
+        QJsonObject village = val.toObject();
+        QVariantMap villageMap;
+
+        villageMap["id"] = village["id"].toInt();
+        villageMap["name"] = village["name"].toString();
+        villageMap["x"] = village["x"].toInt();
+        villageMap["y"] = village["y"].toInt();
+        villageMap["distance"] = village["distance"].toDouble();
+        villageMap["incomingAttacksAmount"] = village["incomingAttacksAmount"].toInt();
+
+        // Parse attack symbols
+        if (village.contains("incomingAttacksSymbols")) {
+            QJsonObject symbols = village["incomingAttacksSymbols"].toObject();
+            QVariantMap symbolsMap;
+            symbolsMap["gray"] = symbols["gray"].toInt();
+            symbolsMap["green"] = symbols["green"].toInt();
+            symbolsMap["red"] = symbols["red"].toInt();
+            symbolsMap["yellow"] = symbols["yellow"].toInt();
+            villageMap["incomingAttacksSymbols"] = symbolsMap;
+        }
+
+        result.append(villageMap);
+    }
+
+    return result;
+}
+
+QVariantList HtmlParser::extractIncomingMovements(const QString& html)
+{
+    QVariantList result;
+
+    // Travian stores movement data in viewData JSON, similar to farm lists
+    // Look for patterns like: "movements":[...], "incomingTroops":[...], "troops":[...]
+
+    // Try multiple possible field names
+    QStringList possibleFields = {"movements", "incomingTroops", "troops", "incomingAttacks"};
+
+    for (const QString& fieldName : possibleFields) {
+        // Build regex to find this specific array
+        QString pattern = QString(R"("%1"\s*:\s*\[)").arg(fieldName);
+        QRegularExpression rx(pattern);
+        QRegularExpressionMatch m = rx.match(html);
+
+        if (!m.hasMatch()) {
+            continue;
+        }
+
+        // Found the field - now extract the full array
+        int startPos = m.capturedEnd(0) - 1; // Back to '['
+        int braceCount = 0;
+        int endPos = startPos;
+        bool inString = false;
+        bool escapeNext = false;
+
+        for (int i = startPos; i < html.length(); ++i) {
+            QChar c = html[i];
+
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+
+            if (c == '\\') {
+                escapeNext = true;
+                continue;
+            }
+
+            if (c == '"' && !escapeNext) {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) {
+                continue;
+            }
+
+            if (c == '[' || c == '{') {
+                braceCount++;
+            } else if (c == ']' || c == '}') {
+                braceCount--;
+                if (braceCount == 0) {
+                    endPos = i + 1;
+                    break;
+                }
+            }
+        }
+
+        if (endPos > startPos) {
+            QString jsonStr = html.mid(startPos, endPos - startPos);
+
+            QJsonParseError err{};
+            QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &err);
+
+            if (!doc.isNull() && doc.isArray()) {
+                QJsonArray movements = doc.array();
+                qDebug() << "[PARSER] Found" << movements.size() << "movements in field:" << fieldName;
+
+                // Parse each movement
+                for (const QJsonValue& val : movements) {
+                    if (!val.isObject()) {
+                        continue;
+                    }
+
+                    QJsonObject mov = val.toObject();
+                    QVariantMap movement;
+
+                    // Extract common fields
+                    movement["id"] = mov["id"].toInt();
+                    movement["type"] = mov["type"].toInt(); // 3=attack, 4=raid, etc
+                    movement["movementType"] = mov["movementType"].toInt();
+                    movement["arrivalTime"] = mov["arrivalTime"].toInt(); // Unix timestamp
+                    movement["remainingSeconds"] = mov["remainingSeconds"].toInt();
+                    movement["attackType"] = mov["attackType"].toInt();
+
+                    // Source/destination info
+                    if (mov.contains("from")) {
+                        QJsonObject from = mov["from"].toObject();
+                        movement["fromVillageId"] = from["villageId"].toInt();
+                        movement["fromVillageName"] = from["villageName"].toString();
+                        movement["fromPlayerName"] = from["playerName"].toString();
+                    }
+
+                    if (mov.contains("to")) {
+                        QJsonObject to = mov["to"].toObject();
+                        movement["toVillageId"] = to["villageId"].toInt();
+                        movement["toVillageName"] = to["villageName"].toString();
+                    }
+
+                    // Troop info if available
+                    if (mov.contains("troops")) {
+                        QJsonObject troops = mov["troops"].toObject();
+                        movement["troops"] = troops.toVariantMap();
+                    }
+
+                    // Resources being carried
+                    if (mov.contains("resources")) {
+                        QJsonObject resources = mov["resources"].toObject();
+                        movement["resources"] = resources.toVariantMap();
+                    }
+
+                    result.append(movement);
+                }
+
+                return result; // Found and parsed successfully
+            } else {
+                qWarning() << "[PARSER] Failed to parse" << fieldName << "JSON:" << err.errorString();
+            }
+        }
+    }
+
+    qDebug() << "[PARSER] No movement data found in HTML - tried fields:" << possibleFields;
+    return result;
+}

@@ -19,6 +19,7 @@ static const QString COOKIE_CACHE_PATH =
     "/Users/kekinci/Desktop/test/config/cookie_cache.json";
 
 TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
+  m_telegramNotifier = new TelegramNotifier(this);
   m_fetcher = new TravianDataFetcher(this);
 
   // Initialize build queue manager
@@ -33,6 +34,14 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
 
   connect(m_troopQueueManager, &TroopQueueManager::configChanged, this,
           &TravianUiBridge::troopConfigsChanged);
+
+  connect(m_troopQueueManager, &TroopQueueManager::timerTick, this,
+          [this](int villageId, const QString &building, int remaining) {
+            Q_UNUSED(villageId);
+            Q_UNUSED(building);
+            Q_UNUSED(remaining);
+            emit troopTimerTick();
+          });
 
   // Initialize farm list manager
   m_farmListManager = new FarmListManager(this);
@@ -142,6 +151,32 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
   connect(m_countdownTimer, &QTimer::timeout, this,
           &TravianUiBridge::onCountdownTimer);
 
+  // Session health check timer - every 30 minutes
+  m_sessionCheckTimer = new QTimer(this);
+  m_sessionCheckTimer->setInterval(30 * 60 * 1000); // 30 minutes
+  connect(m_sessionCheckTimer, &QTimer::timeout, this, [this]() {
+    if (m_isLoggedIn) {
+      logActivity("Oturum sağlık kontrolü yapılıyor...", "info");
+      m_fetcher->checkSessionHealth();
+    }
+  });
+
+  // Session health check result handler
+  connect(m_fetcher, &TravianDataFetcher::sessionHealthCheckResult, this,
+          [this](bool isValid) {
+            if (!isValid && m_isLoggedIn) {
+              logActivity(
+                  "Oturum sağlık kontrolü başarısız, tekrar giriş yapılıyor...",
+                  "warning");
+              m_isLoggedIn = false;
+              emit isLoggedInChanged();
+              QMetaObject::invokeMethod(this, "performLogin",
+                                        Qt::QueuedConnection);
+            } else if (isValid) {
+              logActivity("Oturum sağlık kontrolü başarılı", "info");
+            }
+          });
+
   // Settings'den ayarları yükle
   loadSettings();
 
@@ -150,6 +185,7 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
 
   // BaseUrl'i settings'den al
   m_fetcher->setBaseUrl(m_baseUrl);
+  m_fetcher->setCookieCachePath(COOKIE_CACHE_PATH);
 
   setStatus("✅ Hazır");
   logActivity("Uygulama başlatıldı", "info");
@@ -161,6 +197,7 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
     setStatus("✅ Giriş başarılı!");
     logActivity("Giriş başarılı", "success");
     setLoading(false);
+    m_sessionCheckTimer->start();
 
     // Cookie'leri kaydet (gelecek seferler için)
     m_fetcher->saveCookiesToFile(COOKIE_CACHE_PATH);
@@ -190,23 +227,41 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
                         "info");
           });
 
-  connect(m_fetcher, &TravianDataFetcher::fetchError, this,
-          [this](const QString &pageName, const QString &error) {
-            // Session expired olabilir, tekrar login dene
-            if (error.contains("302") || error.contains("redirect") ||
-                error.contains("401") || error.contains("unauthorized")) {
-              setStatus("⚠️ Session expired, tekrar giriş yapılıyor...");
-              logActivity("Oturum süresi doldu, tekrar giriş yapılıyor...",
-                          "warning");
-              m_isLoggedIn = false;
-              QMetaObject::invokeMethod(this, "performLogin",
-                                        Qt::QueuedConnection);
-              return;
-            }
-            setStatus(QString("❌ %1: %2").arg(pageName, error));
-            logActivity(QString("Hata: %1 - %2").arg(pageName, error), "error");
-            setLoading(false);
-          });
+  connect(
+      m_fetcher, &TravianDataFetcher::fetchError, this,
+      [this](const QString &pageName, const QString &error) {
+        // Session expired patterns - trigger re-login
+        if (error.contains("302") || error.contains("redirect") ||
+            error.contains("401") || error.contains("unauthorized")) {
+          setStatus("⚠️ Session expired, tekrar giriş yapılıyor...");
+          logActivity("Oturum süresi doldu, tekrar giriş yapılıyor...",
+                      "warning");
+          m_isLoggedIn = false;
+          emit isLoggedInChanged();
+          m_sessionCheckTimer->stop();
+          QMetaObject::invokeMethod(this, "performLogin", Qt::QueuedConnection);
+          return;
+        }
+
+        // Network errors (GOAWAY, connection reset, timeout)
+        // After retries are exhausted in TravianDataFetcher, just log and
+        // continue
+        if (error.contains("GOAWAY") || error.contains("shutdown") ||
+            error.contains("RemoteHostClosed") ||
+            error.contains("Connection closed") || error.contains("reset") ||
+            error.contains("timed out")) {
+          logActivity(QString("Ağ hatası (%1): %2 - sonraki yenilemede tekrar "
+                              "denenecek")
+                          .arg(pageName, error),
+                      "warning");
+          setLoading(false);
+          return;
+        }
+
+        setStatus(QString("❌ %1: %2").arg(pageName, error));
+        logActivity(QString("Hata: %1 - %2").arg(pageName, error), "error");
+        setLoading(false);
+      });
 
   connect(
       m_fetcher, &TravianDataFetcher::allDataFetched, this,
@@ -376,6 +431,76 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
             }
           });
 
+  // Session expired - auto login
+  connect(m_fetcher, &TravianDataFetcher::sessionExpiredAutoLogin, this, [this]() {
+    qWarning() << "[AUTO-LOGIN] Session expired - attempting automatic re-login...";
+    logActivity("Oturum süresi doldu - otomatik giriş yapılıyor...", "warning");
+
+    if (!m_username.isEmpty() && !m_password.isEmpty()) {
+      m_fetcher->performLogin(m_username, m_password);
+    } else {
+      qCritical() << "[AUTO-LOGIN] Cannot auto-login - credentials not available!";
+      logActivity("HATA: Otomatik giriş yapılamadı - kullanıcı bilgileri eksik!", "error");
+    }
+  });
+
+  // Incoming attacks fetched
+  connect(m_fetcher, &TravianDataFetcher::incomingAttacksFetched, this,
+          [this](int villageId, const QVariantList &attacks) {
+            // Store attack details for this village
+            m_attackDetails[QString::number(villageId)] = attacks;
+            emit attackDetailsChanged();
+
+            int currentCount = attacks.size();
+            int lastCount = m_lastAttackCounts.value(villageId, 0);
+
+            if (currentCount > 0 && currentCount > lastCount) {
+              QString msg = QString("⚠️ Köy %1 için %2 saldırı tespit edildi!")
+                                .arg(villageId)
+                                .arg(currentCount);
+
+              if (m_telegramNotifier) {
+                m_telegramNotifier->sendNotification(msg);
+                logActivity("Telegram saldırı bildirimi gönderildi", "warning");
+              }
+            }
+
+            m_lastAttackCounts[villageId] = currentCount;
+
+            if (!attacks.isEmpty()) {
+              logActivity(
+                  QString("Köy %1: %2 gelen saldırı bilgisi güncellendi")
+                      .arg(villageId)
+                      .arg(attacks.size()),
+                  "warning");
+            }
+          });
+
+  // Timer to update attack countdown every second
+  QTimer *attackCountdownTimer = new QTimer(this);
+  connect(attackCountdownTimer, &QTimer::timeout, this, [this]() {
+    bool hasChanges = false;
+    for (auto it = m_attackDetails.begin(); it != m_attackDetails.end(); ++it) {
+      QVariantList attacks = it.value().toList();
+      for (int i = 0; i < attacks.size(); ++i) {
+        QVariantMap attack = attacks[i].toMap();
+        qint64 remaining = attack["remainingSeconds"].toLongLong();
+        if (remaining > 0) {
+          attack["remainingSeconds"] = remaining - 1;
+          attacks[i] = attack;
+          hasChanges = true;
+        }
+      }
+      if (hasChanges) {
+        it.value() = attacks;
+      }
+    }
+    if (hasChanges) {
+      emit attackDetailsChanged();
+    }
+  });
+  attackCountdownTimer->start(1000);
+
   // Başlangıçta önce kaydedilmiş cookie'yi dene, yoksa login yap
   if (m_fetcher->tryLoadSavedCookies(COOKIE_CACHE_PATH)) {
     // Cookie'ler yüklendi, direkt veri çekmeye başla
@@ -383,6 +508,7 @@ TravianUiBridge::TravianUiBridge(QObject *parent) : QObject(parent) {
     emit isLoggedInChanged();
     setStatus("✅ Kaydedilmiş oturum kullanılıyor");
     logActivity("Kaydedilmiş oturum bulundu, veri çekiliyor...", "info");
+    m_sessionCheckTimer->start();
     QMetaObject::invokeMethod(this, "startFetch", Qt::QueuedConnection);
   } else if (!m_username.isEmpty() && !m_password.isEmpty()) {
     // Cookie yok/expired, login yap
@@ -405,12 +531,36 @@ void TravianUiBridge::loadSettings() {
       settings.value("Server/baseUrl", "https://ts30.x3.europe.travian.com")
           .toString();
 
+  // Telegram settings
+  QString defaultBotToken = "8265260297:AAFoM_IHCpuinuhUxcuCtQSU399FU7jbqBE";
+  QString botToken =
+      settings.value("Telegram/botToken", defaultBotToken).toString().trimmed();
+  if (botToken.isEmpty()) {
+    botToken = defaultBotToken;
+  }
+  // Default ChatID removed - user must provide it
+  QString chatId = settings.value("Telegram/chatId", "").toString().trimmed();
+
+  if (m_telegramNotifier) {
+    m_telegramNotifier->setCredentials(botToken, chatId);
+  }
+
   // Credentials
   m_username = settings.value("Credentials/username", "").toString().trimmed();
   m_password = settings.value("Credentials/password", "").toString().trimmed();
 
   // Bot mode
   m_botMode = settings.value("BotMode/mode", "build").toString();
+}
+
+void TravianUiBridge::testNotification() {
+  if (m_telegramNotifier) {
+    m_telegramNotifier->sendNotification(
+        "⚠️ TEST: Telegram bildirimleri çalışıyor! ⚠️");
+    logActivity("Test bildirimi gönderildi", "info");
+  } else {
+    logActivity("Telegram notifier başlatılmamış!", "error");
+  }
 }
 
 void TravianUiBridge::setLoading(bool v) {
@@ -525,18 +675,39 @@ int TravianUiBridge::getRandomInterval() const {
   if (m_refreshMode == "smart") {
     // Smart mode: Calculate based on construction queue
     int constructionTimeLeft = getConstructionTimeRemaining();
+    int interval = 0;
 
     if (constructionTimeLeft > 0) {
       // If building is in progress, check shortly after completion (add
       // 10-30sec buffer)
       int buffer = QRandomGenerator::global()->bounded(10, 31) * 1000;
-      int interval = constructionTimeLeft + buffer;
-      return interval;
+      interval = constructionTimeLeft + buffer;
     } else {
       // No construction, check every 2-5 minutes
-      int interval = QRandomGenerator::global()->bounded(120, 301) * 1000;
-      return interval;
+      interval = QRandomGenerator::global()->bounded(120, 301) * 1000;
     }
+
+    // Checking if we should cap the interval for troop training
+    // If bot mode is "troop" or "mixed" AND we have configured troops
+    bool hasTroops = !m_troopQueueManager->getConfiguredVillages().isEmpty();
+    if (hasTroops && (m_botMode == "troop" || m_botMode == "mixed")) {
+      // Troop training interval: 5-10 minutes (300-600 seconds)
+      int troopInterval = QRandomGenerator::global()->bounded(300, 601) * 1000;
+
+      // Use the smaller interval to ensure we don't wait too long
+      // (This handles cases where construction takes hours but we need to train
+      // troops)
+      if (troopInterval < interval) {
+        // Log only if significantly different (e.g. shortening by > 1 min)
+        if (interval - troopInterval > 60000) {
+          qDebug() << "[UI] Smart interval capped by troop training logic:"
+                   << interval / 1000 << "s ->" << troopInterval / 1000 << "s";
+        }
+        interval = troopInterval;
+      }
+    }
+
+    return interval;
   } else if (m_refreshMode == "short") {
     // Short mode: 30-60 seconds (less aggressive than 4-5sec)
     return QRandomGenerator::global()->bounded(30, 61) * 1000;
@@ -792,12 +963,15 @@ QVariantList TravianUiBridge::troopConfigs() const {
 
 void TravianUiBridge::setVillageTroop(int villageId, const QString &troopId,
                                       const QString &troopName,
-                                      const QString &building) {
-  m_troopQueueManager->setVillageTroop(villageId, troopId, troopName, building);
-  logActivity(QString("Köy %1 için asker ayarlandı: %2 (%3)")
+                                      const QString &building,
+                                      int intervalMinutes) {
+  m_troopQueueManager->setVillageTroop(villageId, troopId, troopName, building,
+                                       intervalMinutes);
+  logActivity(QString("Köy %1 için asker ayarlandı: %2 (%3) - %4 dakika aralık")
                   .arg(villageId)
                   .arg(troopName)
-                  .arg(building),
+                  .arg(building)
+                  .arg(intervalMinutes),
               "info");
 }
 
@@ -806,6 +980,17 @@ void TravianUiBridge::removeVillageTroop(int villageId,
   m_troopQueueManager->removeVillageTroop(villageId, building);
   logActivity(QString("Köy %1 için otomatik asker basma kaldırıldı (%2)")
                   .arg(villageId)
+                  .arg(building),
+              "info");
+}
+
+void TravianUiBridge::setVillageTroopEnabled(int villageId,
+                                             const QString &building,
+                                             bool enabled) {
+  m_troopQueueManager->setVillageTroopEnabled(villageId, building, enabled);
+  logActivity(QString("Köy %1 otomatik asker basma %2: %3")
+                  .arg(villageId)
+                  .arg(enabled ? "aktif" : "pasif")
                   .arg(building),
               "info");
 }
