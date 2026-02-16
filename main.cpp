@@ -55,7 +55,23 @@ void customMessageHandler(QtMsgType type, const QMessageLogContext &context,
 
   // Send to Telegram Logger
   if (g_telegramLogger) {
-    g_telegramLogger->addLog(logLine);
+    // Filter logs for Telegram - only send important events
+    bool important = false;
+    if (logLine.contains("Sonraki yenileme", Qt::CaseInsensitive) ||
+        logLine.contains("Asker eğitimi", Qt::CaseInsensitive) ||
+        logLine.contains("Yağma listesi", Qt::CaseInsensitive) ||
+        logLine.contains("Oturum", Qt::CaseInsensitive) ||
+        logLine.contains("Giriş", Qt::CaseInsensitive) ||
+        logLine.contains("Saldırı", Qt::CaseInsensitive) ||
+        logLine.contains("Hata", Qt::CaseInsensitive) ||
+        logLine.contains("ERROR", Qt::CaseInsensitive) ||
+        logLine.contains("FATAL", Qt::CaseInsensitive)) {
+      important = true;
+    }
+
+    if (important) {
+      g_telegramLogger->addLog(logLine);
+    }
   }
 }
 
